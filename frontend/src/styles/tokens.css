@@ -1,0 +1,83 @@
+/* ============================================================
+   设计令牌 —— 所有页面共用的唯一颜色 / 间距 / 圆角来源
+   ============================================================ */
+:root {
+  /* 品牌与语义色 */
+  --primary: #5b5bd6;
+  --primary-strong: #4a48c9;
+  --primary-soft: #eeedfd;
+  --primary-ring: rgba(91, 91, 214, 0.16);
+  --accent: #12968a;
+  --accent-soft: #e6f6f3;
+  --danger: #d8504f;
+  --danger-soft: #fdeeee;
+  --warn: #c67c12;
+  --warn-soft: #fdf3e2;
+  --success: #12968a;
+
+  /* 中性色 */
+  --bg: #f4f5f9;
+  --surface: #ffffff;
+  --surface-2: #fafbfe;
+  --surface-3: #f2f4fa;
+  --line: #e8eaf2;
+  --line-strong: #d8dcea;
+  --ink: #141726;
+  --ink-2: #4d5266;
+  --ink-3: #878da3;
+  --ink-4: #aeb3c4;
+
+  /* 深色画布（登录品牌侧） */
+  --brand-900: #0b0e20;
+  --brand-800: #121631;
+  --brand-700: #1d1f4a;
+
+  /* 形状与阴影 */
+  --radius-xl: 22px;
+  --radius-lg: 18px;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+  --shadow-xs: 0 1px 2px rgba(20, 23, 38, 0.05);
+  --shadow-card: 0 1px 2px rgba(20, 23, 38, 0.04), 0 14px 34px -26px rgba(20, 23, 38, 0.3);
+  --shadow-pop: 0 24px 60px -28px rgba(20, 23, 38, 0.35);
+
+  /* 排版 */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-mono: 'SFMono-Regular', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
+
+  --shell-sidebar: 244px;
+
+  /* ---------- Element Plus 主题覆盖 ---------- */
+  --el-color-primary: #5b5bd6;
+  --el-color-primary-light-3: #8d8de3;
+  --el-color-primary-light-5: #adadee;
+  --el-color-primary-light-7: #cdcdf6;
+  --el-color-primary-light-8: #dedef9;
+  --el-color-primary-light-9: #eeedfd;
+  --el-color-primary-dark-2: #4a48c9;
+  --el-color-success: #12968a;
+  --el-color-success-light-9: #e6f6f3;
+  --el-color-warning: #c67c12;
+  --el-color-warning-light-9: #fdf3e2;
+  --el-color-danger: #d8504f;
+  --el-color-danger-light-9: #fdeeee;
+  --el-color-info: #878da3;
+  --el-text-color-primary: #141726;
+  --el-text-color-regular: #4d5266;
+  --el-text-color-secondary: #878da3;
+  --el-text-color-placeholder: #aeb3c4;
+  --el-border-color: #e8eaf2;
+  --el-border-color-light: #eef0f6;
+  --el-border-color-lighter: #f2f4fa;
+  --el-fill-color: #f4f5f9;
+  --el-fill-color-light: #fafbfe;
+  --el-fill-color-blank: #ffffff;
+  --el-bg-color: #ffffff;
+  --el-border-radius-base: 10px;
+  --el-border-radius-small: 8px;
+  --el-font-family: var(--font-sans);
+  --el-font-size-base: 14px;
+  --el-box-shadow-light: var(--shadow-card);
+}

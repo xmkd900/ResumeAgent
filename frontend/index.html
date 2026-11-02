@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0d1024" />
+    <meta
+      name="description"
+      content="IntelliCareer Agent：简历诊断、模拟面试与薄弱点补强的一体化 AI 面试备战工作台。"
+    />
+    <title>IntelliCareer · AI 面试备战工作台</title>
+    <style>
+      .boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: #f4f5f9;
+        color: #878da3;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        font-size: 12px;
+        letter-spacing: 0.02em;
+      }
+      .boot__mark {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border-radius: 13px;
+        background: linear-gradient(145deg, #1c1f42, #0d1024);
+        color: #a9a7ff;
+        animation: boot-pulse 1.6s ease-in-out infinite;
+      }
+      .boot__bar {
+        width: 120px;
+        height: 3px;
+        border-radius: 3px;
+        overflow: hidden;
+        background: #e6e8f1;
+      }
+      .boot__bar i {
+        display: block;
+        width: 40%;
+        height: 100%;
+        border-radius: inherit;
+        background: #5b5bd6;
+        animation: boot-slide 1.2s ease-in-out infinite;
+      }
+      @keyframes boot-pulse {
+        0%, 100% { transform: translateY(0); opacity: 1; }
+        50% { transform: translateY(-3px); opacity: 0.75; }
+      }
+      @keyframes boot-slide {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(250%); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot__mark, .boot__bar i { animation: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="boot">
+        <span class="boot__mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="22" height="22" fill="none">
+            <path d="M16 3.5 28 10v12L16 28.5 4 22V10z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+            <path d="M16 10 22 13.4v6.6L16 23.4 10 20v-6.6z" fill="currentColor" opacity="0.9" />
+          </svg>
+        </span>
+        <span>正在进入工作台…</span>
+        <span class="boot__bar" aria-hidden="true"><i></i></span>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
