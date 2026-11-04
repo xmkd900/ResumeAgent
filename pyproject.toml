@@ -24,6 +24,10 @@ dependencies = [
     "sqlalchemy>=2.1.6",
     "pydantic-settings>=2.0.0",
     "uvicorn>=0.54.0",
+    "python-multipart>=0.0.33",
+    "pypdf>=6.21.4",
+    "python-docx>=1.2.0",
+    "openai>=3.42.1",
 ]
 
 [project.scripts]

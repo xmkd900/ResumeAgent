@@ -9,4 +9,14 @@ wheels/
 # Virtual environments
 .venv
 .idea
-tests
+
+# Local secrets
+.env
+
+# Runtime uploads (PII，不入库)
+src/uploads/*
+!src/uploads/__init__.py
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/

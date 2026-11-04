@@ -5,28 +5,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import settings
-from app.db.session import engine
-from app.models import Base
+from app.services.parser import recover_stale_pending
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    # 启动时的操作
     print("应用启动中...")
-    try:
-        # v0 便捷建表；P0 引入 alembic 后改由迁移管理
-        Base.metadata.create_all(bind=engine)
-        print("数据库表已就绪")
-    except Exception as e:  # noqa: BLE001  启动期允许任何建表失败：告警而非崩溃
-        print(f"数据库未就绪（先 docker compose up -d mysql）：{e}")
+    stale = recover_stale_pending()
+    if stale:
+        print(f"已将 {stale} 条超时未解析的简历标记为 failed，可在页面重新解析")
     yield
-    # 关闭时的操作
     print("应用关闭中...")
 
 
 def create_app() -> FastAPI:
-    """创建FastAPI应用实例"""
     app = FastAPI(
         title=settings.PROJECT_NAME,
         description="JD Agent API",
@@ -34,7 +26,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # 配置CORS
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.BACKEND_CORS_ORIGINS,
@@ -43,8 +34,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(api_router, prefix="/api/v1")
+    @app.get("/health", tags=["health"])
+    def health():
+        return {
+            "status": "ok",
+            "llm_configured": bool((settings.LLM_API_KEY or "").strip()),
+            "llm_model": settings.LLM_MODEL,
+            "llm_mock": settings.LLM_MOCK,
+        }
 
+    app.include_router(api_router, prefix="/api/v1")
     return app
 
 

@@ -78,7 +78,10 @@ function normalizeMessage(error) {
     const msg = String(first?.msg || '').replace(/^Value error,\s*/i, '')
     return field ? `${field}：${msg}` : msg
   }
-  if (!error.response) return '无法连接后端服务，请确认服务已启动'
+  if (!error.response) {
+    if (error.code === 'ECONNABORTED') return '请求超时，请稍后重试'
+    return '无法连接后端服务，请确认服务已启动'
+  }
   if (status === 401) return '登录状态已失效，请重新登录'
   if (status === 403) return '没有访问该资源的权限'
   // Vite 代理在后端未启动时也会返回 500，这里给出可操作的提示
