@@ -16,6 +16,12 @@ wheels/
 # Runtime uploads (PII，不入库)
 src/uploads/*
 !src/uploads/__init__.py
+# 旧启动目录产生的上传文件（PII）
+src/src/
+
+# Agent workspace data / pytest temp cache
+.workbuddy/
+pytest-cache-files-*/
 
 # Tooling caches
 .pytest_cache/

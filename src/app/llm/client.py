@@ -81,6 +81,27 @@ def _request(
     return client.chat.completions.create(**kwargs)
 
 
+def _provider_message(exc: BadRequestError) -> str:
+    """尽量取出上游 400 的可读原因；只在日志/映射中使用，不回显 key。"""
+    response = getattr(exc, "response", None)
+    if response is not None:
+        data = None
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            error = data.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+                if isinstance(message, str) and message:
+                    return message
+        text = getattr(response, "text", "")
+        if isinstance(text, str) and text:
+            return text[:300]
+    return str(exc)[:300]
+
+
 def chat(
     messages: Sequence[Mapping[str, str]],
     *,
@@ -125,8 +146,16 @@ def chat(
     except (APITimeoutError, APIConnectionError) as exc:
         raise LLMError("模型服务超时或网络不可达，请稍后再试") from exc
     except BadRequestError as exc:
-        logger.exception("model rejected request")
-        raise LLMError("模型请求被拒绝，请检查模型名称与参数配置") from exc
+        provider_message = _provider_message(exc)
+        logger.error("model rejected request: %s", provider_message)
+        lowered = provider_message.lower()
+        if "location is not supported" in lowered:
+            raise LLMError(
+                "当前网络或账号所在地区不受模型服务支持，请更换可用网络或模型"
+            ) from exc
+        if "not found" in lowered and "model" in lowered:
+            raise LLMError("模型名称不可用，请检查 LLM_MODEL 配置") from exc
+        raise LLMError("模型请求被拒绝，请检查模型名称、参数或账号权限") from exc
     except InternalServerError as exc:
         raise LLMError("模型服务暂时不可用，请稍后重试") from exc
     except Exception as exc:

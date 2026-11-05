@@ -8,6 +8,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.diagnosis_report import DiagnosisReport
+    from app.models.resume_claim import ResumeClaim
 
 
 class Resume(Base):
@@ -32,6 +33,11 @@ class Resume(Base):
         back_populates="resume",
         cascade="all, delete-orphan",
         order_by="DiagnosisReport.created_at.desc()",
+    )
+    claims: Mapped[list["ResumeClaim"]] = relationship(
+        back_populates="resume",
+        cascade="all, delete-orphan",
+        order_by="ResumeClaim.id",
     )
 
     @property

@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import settings
 from app.core.dependencies import get_current_user
 from app.db.session import get_db
-from app.models import DiagnosisReport, Resume, User
+from app.models import DiagnosisReport, Resume, ResumeClaim, User
+from app.schemas.interview import ResumeClaimOut
 from app.schemas.resume import (
     DiagnoseRequest,
     DimensionScore,
@@ -19,6 +20,7 @@ from app.schemas.resume import (
     ResumeListOut,
     ResumeOut,
 )
+from app.services.claim_extraction import ClaimExtractionError, extract_claims, sync_claims
 from app.services.diagnosis import DiagnosisError, run_diagnosis
 from app.services.parser import parse_resume_task
 from app.services.storage import save_upload
@@ -119,6 +121,41 @@ def get_resume(
     db: Session = Depends(get_db),
 ):
     return to_resume_out(get_owned_resume(db, resume_id, user.id))
+
+
+@router.get("/{resume_id}/claims", response_model=list[ResumeClaimOut])
+def list_resume_claims(
+    resume_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    resume = get_owned_resume(db, resume_id, user.id)
+    rows = db.scalars(
+        select(ResumeClaim)
+        .where(ResumeClaim.resume_id == resume.id)
+        .order_by(ResumeClaim.id)
+    ).all()
+    return [ResumeClaimOut.model_validate(row) for row in rows]
+
+
+@router.post("/{resume_id}/claims/extract", response_model=list[ResumeClaimOut])
+def extract_resume_claims(
+    resume_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """从已解析简历抽取可追问事实；没有证据的 claim 会被丢弃。"""
+    resume = get_owned_resume(db, resume_id, user.id)
+    if resume.parse_status != "done" or not resume.raw_text:
+        raise HTTPException(status_code=409, detail="简历尚未解析完成")
+
+    try:
+        claims = extract_claims(resume.raw_text)
+    except ClaimExtractionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    rows = sync_claims(db, resume.id, claims)
+    return [ResumeClaimOut.model_validate(row) for row in rows]
 
 
 @router.post("/{resume_id}/reparse", response_model=ResumeOut)

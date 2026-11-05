@@ -7,7 +7,6 @@
 - 报告只在完整校验通过后落库。
 """
 
-import json
 import logging
 import re
 from typing import Any
@@ -16,6 +15,7 @@ from pydantic import ValidationError
 
 from app.core.config import settings
 from app.llm.client import LLMError, chat
+from app.llm.json import extract_json_object as _extract_json_object
 from app.schemas.resume import DiagnosisResult, DimensionScore, IssueOut
 from app.services.parser import split_sections
 
@@ -126,26 +126,6 @@ def _normalize_result(result: DiagnosisResult) -> DiagnosisResult:
         dimension_scores=dimension_scores,
         issues=issues,
     )
-
-
-def _extract_json_object(raw: str) -> dict[str, Any]:
-    """从模型输出中提取 JSON 对象：兼容 ```json 围栏与前后附带解释的情况。"""
-    text = (raw or "").strip()
-    if not text:
-        raise ValueError("模型返回为空")
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*```$", "", text)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end <= start:
-            raise
-        data = json.loads(text[start : end + 1])
-    if not isinstance(data, dict):
-        raise TypeError("模型未返回 JSON 对象")
-    return data
 
 
 def _sanitize_quotes(result: DiagnosisResult, resume_text: str) -> DiagnosisResult:
