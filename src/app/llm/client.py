@@ -69,6 +69,7 @@ def _request(
     max_tokens: int,
     temperature: float,
     json_mode: bool,
+    timeout: float | None = None,
 ) -> Any:
     kwargs: dict[str, Any] = {
         "model": settings.LLM_MODEL,
@@ -78,6 +79,9 @@ def _request(
     }
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+    # 批量抽取这类长输出调用可以单独放宽超时，不影响普通对话
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     return client.chat.completions.create(**kwargs)
 
 
@@ -108,6 +112,7 @@ def chat(
     max_tokens: int = 2000,
     temperature: float = 0.2,
     json_mode: bool = True,
+    timeout: float | None = None,
 ) -> LLMResponse:
     """发起一次无状态对话请求。messages 由调用方负责组装与持久化。"""
     client = get_client()
@@ -122,6 +127,7 @@ def chat(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 json_mode=json_mode,
+                timeout=timeout,
             )
         except BadRequestError as exc:
             # 部分 OpenAI 兼容端点不支持 response_format，降级为提示词约束
@@ -134,6 +140,7 @@ def chat(
                     max_tokens=max_tokens,
                     temperature=temperature,
                     json_mode=False,
+                    timeout=timeout,
                 )
             else:
                 raise

@@ -11,11 +11,13 @@ const props = defineProps({
   uploadProgress: { type: Number, default: 0 },
   analyzing: { type: Boolean, default: false },
   reparsing: { type: Boolean, default: false },
+  extracting: { type: Boolean, default: false },
+  claimCount: { type: Number, default: 0 },
   canDiagnose: { type: Boolean, default: false },
   pollExpired: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['upload', 'diagnose', 'refresh', 'reparse'])
+const emit = defineEmits(['upload', 'diagnose', 'refresh', 'reparse', 'extract-claims'])
 
 const fileInput = ref(null)
 const dragging = ref(false)
@@ -38,6 +40,9 @@ const failureHint = computed(() => {
 })
 
 const busy = computed(() => props.uploading || props.analyzing)
+const canExtract = computed(
+  () => props.resume?.parse_status === 'done' && !busy.value && !props.extracting,
+)
 
 function pickFile() {
   if (busy.value) return
@@ -142,15 +147,32 @@ function onDrop(event) {
     </div>
 
     <div class="upload-foot">
-      <p class="upload-foot__note">解析在后台异步执行，不阻塞页面；解析失败可重新上传。</p>
-      <el-button
-        type="primary"
-        :loading="analyzing"
-        :disabled="!canDiagnose"
-        @click="emit('diagnose')"
-      >
-        {{ analyzing ? '正在诊断…' : '开始诊断' }}
-      </el-button>
+      <div class="upload-foot__main">
+        <p class="upload-foot__note">解析在后台异步执行，不阻塞页面；解析失败可重新上传。</p>
+        <p v-if="resume?.parse_status === 'done'" class="upload-foot__claims">
+          <template v-if="claimCount">
+            已提取 <strong class="num">{{ claimCount }}</strong> 条面试要点，面试官会据此深挖项目
+          </template>
+          <template v-else>还没有面试要点：开始面试时会自动提取，也可以现在先抽</template>
+        </p>
+      </div>
+      <div class="upload-foot__actions">
+        <el-button
+          :loading="extracting"
+          :disabled="!canExtract"
+          @click="emit('extract-claims')"
+        >
+          {{ extracting ? '正在提取…' : claimCount ? '重新提取要点' : '提取面试要点' }}
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="analyzing"
+          :disabled="!canDiagnose"
+          @click="emit('diagnose')"
+        >
+          {{ analyzing ? '正在诊断…' : '开始诊断' }}
+        </el-button>
+      </div>
     </div>
   </SectionCard>
 </template>
@@ -406,14 +428,37 @@ function onDrop(event) {
   margin-top: 16px;
 }
 
+.upload-foot__main {
+  min-width: 0;
+}
+
 .upload-foot__note {
   font-size: 11.5px;
   color: var(--ink-3);
   line-height: 1.6;
 }
 
+.upload-foot__claims {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+
+.upload-foot__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
 @media (max-width: 640px) {
   .upload-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .upload-foot__actions {
     flex-direction: column;
     align-items: stretch;
   }

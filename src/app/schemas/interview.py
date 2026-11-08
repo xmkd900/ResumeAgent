@@ -7,8 +7,8 @@ ClaimType = Literal["project", "experience", "skill", "metric"]
 QuestionSource = Literal["resume", "bank", "jd", "generated"]
 QuestionType = Literal["concept", "scenario", "project", "behavioral"]
 Difficulty = Literal["junior", "mid", "senior"]
-SessionStatus = Literal["ongoing", "finished", "aborted"]
-MessageRole = Literal["interviewer", "candidate", "system"]
+SessionStatus = Literal["ongoing", "paused", "finished", "aborted"]
+TurnAction = Literal["open", "ask", "followup", "legacy"]
 Verdict = Literal["good", "partial", "bad"]
 
 
@@ -69,30 +69,59 @@ class QuestionSeed(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class QuestionPlanSlot(BaseModel):
-    """一场面试中的一道题；bank_id 与 claim_id 至少有一个用于溯源。"""
-
-    index: int = Field(ge=1)
-    source: QuestionSource
-    bank_id: int | None = None
-    claim_id: int | None = None
-    competency: str
-    question: str
-    evidence_quote: str | None = None
-    expected_points: list[str] = Field(default_factory=list)
-    rubric: dict = Field(default_factory=dict)
-    max_depth: int = Field(default=2, ge=0, le=5)
-
-
-class QuestionPlan(BaseModel):
-    version: int = 1
-    slots: list[QuestionPlanSlot]
-
-
 class InterviewCreateRequest(BaseModel):
     position: str = Field(min_length=1, max_length=64)
     resume_id: int | None = None
     jd_id: int | None = None
+    jd_text: str | None = Field(default=None, max_length=4000)
+    # 允许调用方收紧/放宽预算；实际题数仍由面试官按对话决定
+    max_questions: int | None = Field(default=None, ge=4, le=20)
+
+
+class JudgementOut(BaseModel):
+    verdict: Verdict
+    score: int = Field(default=0, ge=0, le=100)
+    hit_points: list[str] = Field(default_factory=list)
+    missing_points: list[str] = Field(default_factory=list)
+    followup_hint: str = ""
+    feedback: str = ""
+
+
+class CurrentQuestionOut(BaseModel):
+    turn_id: int
+    turn_index: int
+    depth: int
+    content: str
+    competency: str
+    source: QuestionSource
+    action: Literal["open", "ask", "followup", "legacy"] = "ask"
+
+
+class InterviewTurnOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    turn_index: int
+    action: TurnAction
+    source: QuestionSource
+    depth: int
+    competency: str
+    question: str
+    answer: str | None = None
+    verdict: Verdict | None = None
+    score: int | None = None
+    judgement: JudgementOut | None = None
+    answered_at: datetime | None = None
+    created_at: datetime
+
+
+class InterviewEvaluationOut(BaseModel):
+    score: int
+    headline: str
+    description: str
+    stats: list[dict] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
 
 
 class InterviewSessionOut(BaseModel):
@@ -101,45 +130,22 @@ class InterviewSessionOut(BaseModel):
     id: int
     position: str
     status: SessionStatus
-    total_questions: int
-    current_index: int
-    current_depth: int
+    asked_count: int
+    max_questions: int
     overall_score: int | None = None
     summary: str | None = None
-    question_plan: QuestionPlan | None = None
     started_at: datetime
     finished_at: datetime | None = None
 
 
-class JudgementOut(BaseModel):
-    verdict: Verdict
-    hit_points: list[str] = Field(default_factory=list)
-    missing_points: list[str] = Field(default_factory=list)
-    feedback: str = ""
-
-
-class CurrentQuestionOut(BaseModel):
-    index: int
-    total: int
-    depth: int
-    max_depth: int
-    content: str
-    competency: str
-    source: QuestionSource
-
-
-class InterviewMessageOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    round: int
-    role: MessageRole
-    content: str
-    question_id: int | None = None
-    parent_message_id: int | None = None
-    depth: int
-    judgement: JudgementOut | None = None
-    created_at: datetime
+class InterviewSessionDetailOut(InterviewSessionOut):
+    turns: list[InterviewTurnOut] = Field(default_factory=list)
+    current_question: CurrentQuestionOut | None = None
+    evaluation: InterviewEvaluationOut | None = None
+    covered_competencies: list[str] = Field(default_factory=list)
+    remaining_questions: int = 0
+    # 非致命问题（如简历要点抽取失败导致降级），前端可提示但不阻塞
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AnswerRequest(BaseModel):
@@ -150,3 +156,10 @@ class AnswerResponse(BaseModel):
     judgement: JudgementOut
     next_question: CurrentQuestionOut | None = None
     finished: bool = False
+    asked_count: int = 0
+    max_questions: int = 0
+
+
+class InterviewListOut(BaseModel):
+    items: list[InterviewSessionOut] = Field(default_factory=list)
+    total: int = 0

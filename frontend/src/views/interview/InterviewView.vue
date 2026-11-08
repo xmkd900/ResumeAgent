@@ -1,168 +1,79 @@
 <script setup>
-import { computed, nextTick, reactive, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowRight, Promotion, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowRight, Promotion, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 
 import PageHeader from '@/components/PageHeader.vue'
 import ScoreRing from '@/components/ScoreRing.vue'
 import SectionCard from '@/components/SectionCard.vue'
 import { VERDICT_META } from '@/constants'
+import { useInterviewSession } from '@/composables/useInterviewSession'
 
 const router = useRouter()
-
-/* ---------------- 演示数据 ---------------- */
-
-const POSITIONS = ['后端开发工程师', '前端开发工程师', '算法工程师', '数据分析师']
-const JD_OPTIONS = [
-  { value: 'jd-1', label: '字节跳动 · 后端开发（交易方向）' },
-  { value: 'jd-2', label: '美团 · Java 后端开发' },
-]
-
-const OPENING_MESSAGES = [
-  {
-    id: 1,
-    role: 'interviewer',
-    content: '我们先从索引聊起。你简历里提到对订单查询做过优化，当时慢查询的根因是什么？',
-  },
-  {
-    id: 2,
-    role: 'candidate',
-    content:
-      '订单列表页要按用户、状态、时间三个条件过滤，但当时只有 user_id 单列索引，回表之后还要过滤大量数据。订单量到千万级之后，接口 P99 超过了 800ms。',
-    judgement: {
-      verdict: 'good',
-      hits: ['定位到回表是主要成本', '给出了真实数据量级与指标'],
-      misses: ['没有说明用执行计划验证的方式'],
-    },
-  },
-  {
-    id: 3,
-    role: 'interviewer',
-    content: '嗯，根因清楚。那你最后怎么设计索引的？为什么不是把三个字段都建成独立索引？',
-  },
-  {
-    id: 4,
-    role: 'candidate',
-    content:
-      '我建了 (user_id, status, created_at) 的联合索引。独立索引在 AND 条件下通常只会选一个走，另外两个条件还要回表过滤；联合索引可以把过滤都放在索引层完成，只回表取需要的列。',
-    judgement: {
-      verdict: 'partial',
-      hits: ['说明了联合索引的最左前缀', '解释了独立索引在 AND 下的选择问题'],
-      misses: ['没有提到覆盖索引进一步避免回表', '缺少上线后的效果对比'],
-    },
-  },
-  {
-    id: 5,
-    role: 'interviewer',
-    content: '如果这个查询还要按金额排序，你的索引会怎么调整？代价是什么？',
-  },
-]
-
-const FOLLOW_UPS = [
-  '如果缓存和数据库出现短暂不一致，你怎么保证用户最终看到的结果是对的？',
-  '线上突然冒出一批慢查询，你的排查顺序是什么？',
-  '最后一个问题：如果让你重新设计这个模块，你会改动哪一处？',
-]
-
-const SUMMARY = {
-  score: 78,
-  headline: '技术判断扎实，表达可以更聚焦结果。',
-  description:
-    '8 道题中 6 道回答到位，索引与并发部分有真实的工程细节；薄弱环节集中在「如何验证效果」和「失败经验的复盘」，这也是后续练习的重点。',
-  stats: [
-    { label: '覆盖题目', value: '8', suffix: '题' },
-    { label: '追问深度', value: '1.6', suffix: '层' },
-    { label: '要点覆盖', value: '11/16', suffix: '' },
-  ],
-  strengths: ['索引优化有真实数据支撑', '能主动说明技术取舍', '回答结构清晰'],
-  improvements: ['缺少量化验证方式', '缓存一致性只提到最终一致', '复盘缺少失败经验'],
-}
-
-/* ---------------- 页面状态 ---------------- */
-
-const stage = ref('setup') // setup | ongoing | summary
-const starting = ref(false)
-const setupForm = reactive({ position: POSITIONS[0], jd: '' })
-
-const session = reactive({
-  position: POSITIONS[0],
-  current: 3,
-  total: 8,
-  topic: '索引与查询优化',
-  depth: 1,
-  maxDepth: 2,
-})
-
-const messages = ref(OPENING_MESSAGES.map((item) => ({ ...item })))
 const answer = ref('')
-const chatEl = ref(null)
-let seed = 100
 
-const progress = computed(() => Math.round((session.current / session.total) * 100))
+const {
+  positions,
+  setup,
+  resumes,
+  resumesLoading,
+  resumeError,
+  stage,
+  session,
+  currentQuestion,
+  messages,
+  summary,
+  covered,
+  chatEl,
+  starting,
+  answering,
+  finishing,
+  pausing,
+  paused,
+  error,
+  asked,
+  maxQuestions,
+  depth,
+  topic,
+  progress,
+  canStart,
+  selectedResume,
+  claimHint,
+  loadResumes,
+  startInterview,
+  submitAnswer,
+  pauseInterview,
+  resumeInterview,
+  finishSession,
+  restartInterview,
+} = useInterviewSession()
 
-async function startInterview() {
-  if (!setupForm.position) {
-    ElMessage.warning('请先选择目标岗位')
-    return
-  }
-  starting.value = true
-  await new Promise((resolve) => setTimeout(resolve, 600))
-  session.position = setupForm.position
-  session.current = 3
-  session.depth = 1
-  messages.value = OPENING_MESSAGES.map((item) => ({ ...item }))
-  stage.value = 'ongoing'
-  starting.value = false
-  scrollChat()
-  ElMessage.success('面试已开始（示例数据）')
+const BUDGET_OPTIONS = [6, 8, 10, 12, 16]
+
+onMounted(loadResumes)
+
+async function handleStart() {
+  const ok = await startInterview()
+  if (ok) ElMessage.success('面试已开始')
 }
 
-function scrollChat() {
-  nextTick(() => {
-    if (chatEl.value) chatEl.value.scrollTop = chatEl.value.scrollHeight
-  })
-}
-
-function submitAnswer() {
+async function handleSubmit() {
+  if (answering.value || paused.value) return
   const text = answer.value.trim()
   if (!text) {
     ElMessage.warning('先写下你的回答')
     return
   }
-
-  messages.value.push({
-    id: ++seed,
-    role: 'candidate',
-    content: text,
-    judgement: {
-      verdict: 'partial',
-      hits: ['回答给出了明确的处理顺序'],
-      misses: ['没有说明如何验证效果', '缺少边界情况的讨论'],
-    },
-  })
-  answer.value = ''
-  session.depth = Math.min(session.maxDepth, session.depth + 1)
-
-  if (session.current >= session.total) {
-    scrollChat()
-    ElMessage.info('题目已问完，可以结束面试查看评估')
-    return
-  }
-
-  session.current += 1
-  messages.value.push({
-    id: ++seed,
-    role: 'interviewer',
-    content: FOLLOW_UPS[(session.current - 3) % FOLLOW_UPS.length],
-  })
-  scrollChat()
+  const ok = await submitAnswer(text)
+  if (ok) answer.value = ''
 }
 
-async function finishInterview() {
+async function handleFinish() {
+  if (!session.value || finishing.value) return
   try {
     await ElMessageBox.confirm(
-      '结束后会生成本场评估摘要，并更新薄弱点。确定现在结束吗？',
+      '结束后会生成本场评估摘要。确定现在结束吗？',
       '结束面试',
       {
         confirmButtonText: '结束并查看评估',
@@ -174,17 +85,36 @@ async function finishInterview() {
   } catch {
     return
   }
-  stage.value = 'summary'
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  const ok = await finishSession()
+  if (ok) window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
-function restart() {
-  stage.value = 'setup'
-  answer.value = ''
+async function handlePause() {
+  const ok = paused.value ? await resumeInterview() : await pauseInterview()
+  if (ok) ElMessage.info(paused.value ? '面试已继续' : '面试已暂停，随时可以回来')
+}
+
+async function handleRestart() {
+  if (stage.value === 'ongoing') {
+    try {
+      await ElMessageBox.confirm('重新开始会中止当前面试，已产生的回答不会计入本场评估。', '重新开始', {
+        confirmButtonText: '重新开始',
+        cancelButtonText: '继续面试',
+        type: 'warning',
+      })
+    } catch {
+      return
+    }
+  }
+  await restartInterview()
 }
 
 function goGrowth() {
   router.push('/growth')
+}
+
+function clearError() {
+  error.value = ''
 }
 
 function verdictLabel(verdict) {
@@ -197,58 +127,118 @@ function verdictLabel(verdict) {
     <PageHeader
       eyebrow="Mock Interview"
       title="模拟面试"
-      subtitle="按岗位生成出题计划，逐轮判卷并沿追问链下钻。面试过程中不展示检索来源，保持沉浸。"
+      subtitle="面试官拿到你的简历和 JD 后，按你的回答实时决定问什么、追多深；随时可以暂停。"
     >
       <template #actions>
-        <span v-if="stage === 'ongoing'" class="pill pill--accent">
+        <span v-if="stage === 'ongoing' && !paused" class="pill pill--accent">
           <span class="dot dot--live" />进行中
         </span>
-        <el-button v-if="stage !== 'setup'" @click="restart">重新开始</el-button>
+        <span v-if="stage === 'ongoing' && paused" class="pill pill--soft">已暂停</span>
+        <el-button v-if="stage !== 'setup'" @click="handleRestart">重新开始</el-button>
       </template>
     </PageHeader>
 
+    <el-alert
+      v-if="error"
+      class="page__error"
+      :title="error"
+      type="error"
+      show-icon
+      @close="clearError"
+    />
+
     <!-- ================= 开始面试 ================= -->
     <div v-if="stage === 'setup'" class="setup">
-      <SectionCard class="setup__main" title="开始一场结构化面试">
+      <SectionCard class="setup__main" title="开始一场模拟面试">
         <div class="setup__body">
           <div class="setup__field">
             <label class="setup__label">目标岗位</label>
-            <el-select
-              v-model="setupForm.position"
-              size="large"
-              placeholder="选择岗位"
-              class="setup__control"
-            >
-              <el-option v-for="p in POSITIONS" :key="p" :label="p" :value="p" />
+            <el-select v-model="setup.position" size="large" placeholder="选择岗位" class="setup__control">
+              <el-option v-for="p in positions" :key="p" :label="p" :value="p" />
             </el-select>
-            <p class="setup__hint">题库按 position 维护，决定出题范围与追问链。</p>
+            <p class="setup__hint">决定题库的领域范围，也决定面试官默认考哪些能力。</p>
           </div>
 
           <div class="setup__field">
-            <label class="setup__label">关联 JD（可选）</label>
+            <label class="setup__label">关联简历（推荐）</label>
             <el-select
-              v-model="setupForm.jd"
+              v-model="setup.resumeId"
               size="large"
               clearable
-              placeholder="选择一份已保存的 JD"
+              :loading="resumesLoading"
+              placeholder="选择一份已解析简历"
               class="setup__control"
             >
-              <el-option v-for="jd in JD_OPTIONS" :key="jd.value" :label="jd.label" :value="jd.value" />
+              <el-option
+                v-for="resume in resumes"
+                :key="resume.id"
+                :label="resume.filename"
+                :value="resume.id"
+              />
             </el-select>
-            <p class="setup__hint">关联后会按 JD 要求调整出题权重。</p>
+            <p class="setup__hint">有简历时从你的项目问起；没有则按岗位与 JD 出题。</p>
+            <p
+              v-if="claimHint"
+              class="setup__hint"
+              :class="{ 'setup__hint--warn': !selectedResume?.claim_count }"
+            >
+              {{ claimHint }}
+            </p>
+            <p v-if="resumeError" class="setup__hint setup__hint--warn">{{ resumeError }}</p>
+          </div>
+
+          <div class="setup__field">
+            <label class="setup__label">目标 JD（可选）</label>
+            <el-input
+              v-model="setup.jdText"
+              type="textarea"
+              :rows="4"
+              maxlength="2000"
+              show-word-limit
+              resize="none"
+              placeholder="粘贴岗位 JD，面试官会先提炼能力要求再决定考什么…"
+            />
+            <p class="setup__hint">不填则按岗位通用能力与简历出题。</p>
+          </div>
+
+          <div class="setup__field">
+            <label class="setup__label">题目上限</label>
+            <el-select v-model="setup.maxQuestions" size="large" class="setup__control">
+              <el-option v-for="n in BUDGET_OPTIONS" :key="n" :label="`最多 ${n} 题`" :value="n" />
+            </el-select>
+            <p class="setup__hint">只是上限。问透了面试官会提前收尾，不会为凑数硬问。</p>
           </div>
 
           <div class="setup__preview">
             <div class="setup__preview-head">
-              <span>出题计划预览</span>
-              <span class="pill pill--soft">快照 8 题</span>
+              <span>本场怎么进行</span>
+              <span class="pill pill--soft">按回答实时决定</span>
             </div>
             <ul class="setup__plan">
-              <li><span class="num">01</span>索引与查询优化<span class="pill pill--primary">进行中</span></li>
-              <li><span class="num">02</span>缓存与一致性<span class="setup__plan-meta">追问 2 层</span></li>
-              <li><span class="num">03</span>并发与事务<span class="setup__plan-meta">追问 1 层</span></li>
-              <li><span class="num">04</span>系统设计（交易下单）<span class="setup__plan-meta">追问 2 层</span></li>
+              <li>
+                <span class="num">01</span>
+                开场
+                <span class="setup__plan-meta">自我介绍 / 讲一段经历</span>
+              </li>
+              <li>
+                <span class="num">02</span>
+                简历深挖
+                <span class="setup__plan-meta">项目、取舍、指标来源</span>
+              </li>
+              <li>
+                <span class="num">03</span>
+                能力覆盖
+                <span class="setup__plan-meta">JD 缺口，从题库取题</span>
+              </li>
+              <li>
+                <span class="num">04</span>
+                收尾
+                <span class="setup__plan-meta">问透即停，不凑题数</span>
+              </li>
             </ul>
+            <p class="setup__hint setup__hint--foot">
+              题目不会提前排好：你答到哪、答得怎么样，决定下一句问什么。
+            </p>
           </div>
 
           <el-button
@@ -257,42 +247,43 @@ function verdictLabel(verdict) {
             class="setup__cta"
             :icon="VideoPlay"
             :loading="starting"
-            @click="startInterview"
+            :disabled="!canStart"
+            @click="handleStart"
           >
-            开始面试
+            {{ starting ? '正在准备第一题…' : '开始面试' }}
           </el-button>
         </div>
       </SectionCard>
 
-      <SectionCard class="setup__side" title="本场机制" subtitle="工作流可控，决策点自主">
+      <SectionCard class="setup__side" title="本场机制" subtitle="面试官自主决策，规则只做兜底">
         <ol class="mech">
           <li>
             <span class="mech__idx">1</span>
-            <div><p>出题</p><small>从题库取题，计划存为会话快照</small></div>
+            <div><p>出题</p><small>读简历与 JD，决定开场问什么</small></div>
           </li>
           <li>
             <span class="mech__idx">2</span>
-            <div><p>判卷</p><small>按 rubric 给出三档结论与要点命中</small></div>
+            <div><p>判卷</p><small>按要点给出分数、命中与缺口</small></div>
           </li>
           <li>
             <span class="mech__idx">3</span>
-            <div><p>追问</p><small>表现达标则沿预设链下钻，否则换题</small></div>
+            <div><p>追问</p><small>答得浅就往下追，答得好就换方向</small></div>
           </li>
           <li>
             <span class="mech__idx">4</span>
-            <div><p>收束</p><small>整场评估，薄弱点写入成长闭环</small></div>
+            <div><p>收束</p><small>问透或到上限即收尾，生成复盘</small></div>
           </li>
         </ol>
 
         <div class="mech__note">
           <span class="mech__note-title">沉浸优先</span>
-          <p>面试页不展示检索来源、追问树状态与 KB 命中细节——真实面试官不会给你看草稿纸。</p>
+          <p>面试页不展示题目来源、判卷 rubric 与决策过程——真实面试官不会给你看草稿纸。</p>
         </div>
 
         <div class="mech__meta">
-          <div><span>预计时长</span><strong>25-35 分钟</strong></div>
-          <div><span>题目数量</span><strong>8 题</strong></div>
-          <div><span>最大追问深度</span><strong>2 层</strong></div>
+          <div><span>预计时长</span><strong>20-30 分钟</strong></div>
+          <div><span>题目数量</span><strong>由面试官决定</strong></div>
+          <div><span>追问深度</span><strong>视回答而定</strong></div>
         </div>
       </SectionCard>
     </div>
@@ -303,27 +294,39 @@ function verdictLabel(verdict) {
         <div class="bar">
           <div class="bar__main">
             <div class="bar__title">
-              <h2>{{ session.position }}</h2>
-              <span class="pill pill--primary">{{ session.topic }}</span>
+              <h2>{{ session?.position || setup.position }}</h2>
+              <span class="pill pill--primary">{{ topic }}</span>
             </div>
             <div class="bar__meta">
-              <span>第 <strong class="num">{{ session.current }}</strong> / 共
-                <strong class="num">{{ session.total }}</strong> 题</span>
+              <span>第 <strong class="num">{{ asked }}</strong> 题</span>
               <span class="bar__sep" />
-              <span class="bar__depth">
-                追问深度
-                <span class="depth">
-                  <i
-                    v-for="n in session.maxDepth"
-                    :key="n"
-                    :class="{ 'is-on': n <= session.depth }"
-                  />
+              <span>已覆盖 <strong class="num">{{ covered.length }}</strong> 项能力</span>
+              <template v-if="depth > 0">
+                <span class="bar__sep" />
+                <span class="bar__depth">
+                  追问 · 第 <strong class="num">{{ depth }}</strong> 层
                 </span>
-                <span class="num">{{ session.depth }}/{{ session.maxDepth }}</span>
-              </span>
+              </template>
             </div>
           </div>
-          <el-button class="bar__end" @click="finishInterview">结束面试</el-button>
+          <div class="bar__actions">
+            <el-button
+              :icon="paused ? VideoPlay : VideoPause"
+              :loading="pausing"
+              :disabled="finishing"
+              @click="handlePause"
+            >
+              {{ paused ? '继续面试' : '暂停' }}
+            </el-button>
+            <el-button
+              class="bar__end"
+              :loading="finishing"
+              :disabled="answering || paused"
+              @click="handleFinish"
+            >
+              结束面试
+            </el-button>
+          </div>
         </div>
         <div class="bar__progress">
           <span :style="{ width: `${progress}%` }" />
@@ -338,7 +341,10 @@ function verdictLabel(verdict) {
                 {{ msg.role === 'interviewer' ? '面' : '我' }}
               </span>
               <div class="msg__body">
-                <p class="msg__who">{{ msg.role === 'interviewer' ? '面试官' : '我的回答' }}</p>
+                <p class="msg__who">
+                  {{ msg.role === 'interviewer' ? '面试官' : '我的回答' }}
+                  <span v-if="msg.meta" class="msg__tag">{{ msg.meta }}</span>
+                </p>
                 <div class="msg__bubble">{{ msg.content }}</div>
               </div>
             </div>
@@ -357,6 +363,7 @@ function verdictLabel(verdict) {
                     <li v-for="hit in msg.judgement.hits" :key="hit">
                       <span class="tick tick--hit">✓</span>{{ hit }}
                     </li>
+                    <li v-if="!msg.judgement.hits.length" class="feedback__empty">暂无明确命中</li>
                   </ul>
                 </div>
                 <div class="feedback__col">
@@ -365,27 +372,45 @@ function verdictLabel(verdict) {
                     <li v-for="miss in msg.judgement.misses" :key="miss">
                       <span class="tick tick--miss">–</span>{{ miss }}
                     </li>
+                    <li v-if="!msg.judgement.misses.length" class="feedback__empty">本题要点已覆盖</li>
                   </ul>
                 </div>
               </div>
+              <p v-if="msg.judgement.feedback" class="feedback__note">{{ msg.judgement.feedback }}</p>
             </div>
           </template>
+
+          <div v-if="!currentQuestion" class="session__wait">
+            <span class="dot dot--live" />正在生成下一题…
+          </div>
         </div>
 
         <div class="composer">
+          <div v-if="paused" class="composer__paused">
+            面试已暂停 · 点上方「继续面试」接着答
+          </div>
           <el-input
             v-model="answer"
             type="textarea"
             :rows="3"
-            maxlength="500"
+            maxlength="4000"
             show-word-limit
             resize="none"
+            :disabled="answering || finishing || paused"
             placeholder="用自己的话回答，尽量给出因果、取舍与验证方式…"
-            @keydown.enter.exact.prevent="submitAnswer"
+            @keydown="handleKeydown"
           />
           <div class="composer__foot">
             <span class="composer__hint">Enter 提交 · Shift + Enter 换行</span>
-            <el-button type="primary" :icon="Promotion" @click="submitAnswer">提交回答</el-button>
+            <el-button
+              type="primary"
+              :icon="Promotion"
+              :loading="answering"
+              :disabled="answering || finishing || !currentQuestion"
+              @click="handleSubmit"
+            >
+              提交回答
+            </el-button>
           </div>
         </div>
       </div>
@@ -395,13 +420,13 @@ function verdictLabel(verdict) {
     <div v-else class="summary">
       <SectionCard class="summary__main">
         <div class="summary__head">
-          <ScoreRing :score="SUMMARY.score" :size="124" label="本场表现" suffix="/ 100" />
+          <ScoreRing :score="summary.score" :size="124" label="本场表现" suffix="/ 100" />
           <div class="summary__copy">
             <p class="eyebrow">Session Summary</p>
-            <h2>{{ SUMMARY.headline }}</h2>
-            <p class="summary__desc">{{ SUMMARY.description }}</p>
+            <h2>{{ summary.headline }}</h2>
+            <p class="summary__desc">{{ summary.description }}</p>
             <div class="summary__stats">
-              <div v-for="stat in SUMMARY.stats" :key="stat.label" class="summary__stat">
+              <div v-for="stat in summary.stats" :key="stat.label" class="summary__stat">
                 <span class="summary__stat-label">{{ stat.label }}</span>
                 <span class="summary__stat-value num">
                   {{ stat.value }}<small v-if="stat.suffix">{{ stat.suffix }}</small>
@@ -414,27 +439,31 @@ function verdictLabel(verdict) {
 
       <div class="summary__grid">
         <SectionCard title="亮点" subtitle="这场面试里保持住的部分">
-          <ul class="tags">
-            <li v-for="item in SUMMARY.strengths" :key="item" class="tag tag--good">
+          <ul v-if="summary.strengths.length" class="tags">
+            <li v-for="item in summary.strengths" :key="item" class="tag tag--good">
               <span class="tag__dot" />{{ item }}
             </li>
           </ul>
+          <p v-else class="summary__empty">本场还没有足够稳定的亮点，再面一次看看。</p>
         </SectionCard>
 
-        <SectionCard title="待加强" subtitle="已同步为成长闭环中的薄弱点">
-          <ul class="tags">
-            <li v-for="item in SUMMARY.improvements" :key="item" class="tag tag--warn">
+        <SectionCard title="待加强" subtitle="本场判卷中需要补强的部分">
+          <ul v-if="summary.improvements.length" class="tags">
+            <li v-for="item in summary.improvements" :key="item" class="tag tag--warn">
               <span class="tag__dot" />{{ item }}
             </li>
           </ul>
+          <p v-else class="summary__empty">没有明显短板，保持当前表达节奏。</p>
         </SectionCard>
       </div>
 
       <SectionCard class="summary__next">
         <div class="next">
           <div>
-            <p class="next__title">下一步：去成长闭环补强这 3 个薄弱点</p>
-            <p class="next__desc">薄弱点已按严重度排序，配套练习题来自知识库对应知识点。</p>
+            <p class="next__title">
+              下一步：针对这 {{ summary.improvements.length || 0 }} 个待加强项做专项练习
+            </p>
+            <p class="next__desc">成长闭环接入后，会按严重度排序并推荐对应练习。</p>
           </div>
           <el-button type="primary" :icon="ArrowRight" @click="goGrowth">进入成长闭环</el-button>
         </div>
@@ -483,6 +512,18 @@ function verdictLabel(verdict) {
   margin-top: 6px;
   font-size: 11px;
   color: var(--ink-3);
+}
+
+.setup__hint--warn {
+  color: #b03e3d;
+}
+
+.setup__hint--foot {
+  margin-top: 10px;
+}
+
+.page__error {
+  margin-bottom: 16px;
 }
 
 .setup__preview {
@@ -699,6 +740,13 @@ function verdictLabel(verdict) {
   background: var(--primary);
 }
 
+.bar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
 .bar__end {
   flex: none;
 }
@@ -782,6 +830,17 @@ function verdictLabel(verdict) {
   color: var(--ink-3);
   margin-bottom: 5px;
   padding: 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.msg__tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 10px;
 }
 
 .msg__bubble {
@@ -874,6 +933,29 @@ function verdictLabel(verdict) {
   padding: 2px 0;
 }
 
+.feedback__empty {
+  color: var(--ink-4);
+  font-size: 11px;
+}
+
+.feedback__note {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--line);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+
+.session__wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 0 2px 42px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
 .tick {
   flex: none;
   width: 14px;
@@ -901,6 +983,15 @@ function verdictLabel(verdict) {
   background: var(--surface);
 }
 
+.composer__paused {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
 .composer__foot {
   display: flex;
   align-items: center;
@@ -924,8 +1015,7 @@ function verdictLabel(verdict) {
 .summary__head {
   display: flex;
   align-items: center;
-  gap: 26px;
-}
+  gap: 26px;}
 
 .summary__copy {
   min-width: 0;
@@ -944,6 +1034,12 @@ function verdictLabel(verdict) {
   line-height: 1.75;
   color: var(--ink-2);
   max-width: 640px;
+}
+
+.summary__empty {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-3);
 }
 
 .summary__stats {

@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus'
 
 import {
   diagnoseResume,
+  extractClaims as extractResumeClaims,
   getResume,
   listReports,
   listResumes,
@@ -37,6 +38,7 @@ export function useResumeDiagnosis() {
   const uploadProgress = ref(0)
   const analyzing = ref(false)
   const reparsing = ref(false)
+  const extracting = ref(false)
   const pollExpired = ref(false)
 
   let pollTimer = null
@@ -232,6 +234,34 @@ export function useResumeDiagnosis() {
     }
   }
 
+  /** 抽取面试要点：面试官据此深挖项目，抽不到就按 JD/题库出题 */
+  async function extractActiveClaims() {
+    if (!activeResume.value) {
+      ElMessage.warning('请先选择一份简历')
+      return null
+    }
+    if (activeResume.value.parse_status !== 'done') {
+      ElMessage.warning('简历尚未解析完成，请稍候')
+      return null
+    }
+
+    extracting.value = true
+    pageError.value = ''
+    try {
+      const claims = await extractResumeClaims(activeResume.value.id)
+      const count = Array.isArray(claims) ? claims.length : 0
+      patchActiveResume({ claim_count: count })
+      await loadResumes({ silent: true })
+      return claims
+    } catch (error) {
+      pageError.value = error?.message || '面试要点提取失败，请稍后重试'
+      ElMessage.error(pageError.value)
+      return null
+    } finally {
+      extracting.value = false
+    }
+  }
+
   /** 解析超时或状态可疑时，手动拉一次最新状态 */
   async function refreshActiveResume() {
     if (!activeResume.value) {
@@ -277,6 +307,7 @@ export function useResumeDiagnosis() {
     uploadProgress,
     analyzing,
     reparsing,
+    extracting,
     pollExpired,
     isParsing,
     parseFailed,
@@ -286,6 +317,7 @@ export function useResumeDiagnosis() {
     selectResume,
     uploadFile,
     reparseActiveResume,
+    extractActiveClaims,
     runDiagnosis,
     refreshActiveResume,
   }

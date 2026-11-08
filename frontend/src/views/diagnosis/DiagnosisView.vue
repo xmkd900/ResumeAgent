@@ -28,6 +28,7 @@ const {
   uploadProgress,
   analyzing,
   reparsing,
+  extracting,
   pollExpired,
   isParsing,
   parseFailed,
@@ -37,6 +38,7 @@ const {
   selectResume,
   uploadFile,
   reparseActiveResume,
+  extractActiveClaims,
   runDiagnosis,
   refreshActiveResume,
 } = useResumeDiagnosis()
@@ -76,6 +78,14 @@ function scrollToUpload() {
 async function handleReparse() {
   const resume = await reparseActiveResume()
   if (resume) ElMessage.success('已提交重新解析，请稍候')
+}
+
+async function handleExtractClaims() {
+  const claims = await extractActiveClaims()
+  if (!claims) return
+  ElMessage.success(
+    claims.length ? `已提取 ${claims.length} 条面试要点` : '没有抽取到可用要点，面试将按 JD 与题库出题',
+  )
 }
 
 async function refreshList() {
@@ -122,12 +132,15 @@ async function refreshList() {
         :upload-progress="uploadProgress"
         :analyzing="analyzing"
         :reparsing="reparsing"
+        :extracting="extracting"
+        :claim-count="activeResume?.claim_count || 0"
         :can-diagnose="canDiagnose"
         :poll-expired="pollExpired"
         @upload="handleUpload"
         @diagnose="handleDiagnose"
         @refresh="refreshActiveResume"
         @reparse="handleReparse"
+        @extract-claims="handleExtractClaims"
       />
       <JdCard v-model="jd" class="span-5" />
     </div>

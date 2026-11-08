@@ -47,6 +47,7 @@ def to_resume_out(resume: Resume) -> ResumeOut:
         parse_error=resume.parse_error,
         file_size=resume.file_size,
         created_at=resume.created_at,
+        claim_count=len(resume.claims),
         latest_report=ReportSummaryOut.model_validate(latest) if latest else None,
     )
 
@@ -105,7 +106,7 @@ def list_resumes(
     resumes = db.scalars(
         select(Resume)
         .where(where)
-        .options(selectinload(Resume.reports))
+        .options(selectinload(Resume.reports), selectinload(Resume.claims))
         .order_by(Resume.created_at.desc(), Resume.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)

@@ -29,6 +29,8 @@ class ResumeOut(BaseModel):
     parse_error: str | None = None
     file_size: int
     created_at: datetime
+    # 已抽取的面试要点数量；0 表示还没抽过，建会话时会补抽
+    claim_count: int = 0
     latest_report: ReportSummaryOut | None = None
 
 class ReportOut(BaseModel):

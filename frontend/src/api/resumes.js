@@ -6,6 +6,8 @@
  *   GET  /resumes/{id}                  → Resume（轮询解析状态）
  *   POST /resumes/{id}/diagnose {jd_text?} → Report
  *   GET  /resumes/{id}/reports          → { items: Report[], total }
+ *   GET  /resumes/{id}/claims           → ResumeClaim[]
+ *   POST /resumes/{id}/claims/extract   → ResumeClaim[]（幂等，重抽会覆盖旧要点）
  */
 import { http } from './client'
 
@@ -47,4 +49,15 @@ export function diagnoseResume(id, { jdText } = {}) {
 
 export function listReports(id) {
   return http.get(`/resumes/${id}/reports`).then((response) => response.data)
+}
+
+export function listClaims(id) {
+  return http.get(`/resumes/${id}/claims`).then((response) => response.data)
+}
+
+export function extractClaims(id) {
+  // 抽取要调用 LLM，正常 5-15s，放宽超时
+  return http
+    .post(`/resumes/${id}/claims/extract`, null, { timeout: 120000 })
+    .then((response) => response.data)
 }

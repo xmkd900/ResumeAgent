@@ -22,7 +22,9 @@ from app.schemas.interview import ClaimDraft, ClaimExtraction
 logger = logging.getLogger(__name__)
 
 MAX_RESUME_CHARS = 12000
-MAX_CLAIMS = 12
+MAX_CLAIMS = 10
+# 抽取是批量长输出：比普通单轮调用慢，单独放宽超时（秒）
+EXTRACT_TIMEOUT = 120
 
 SYSTEM_PROMPT = """你是简历事实抽取器。请从简历原文中抽取可用于面试追问的事实。
 
@@ -119,7 +121,7 @@ def extract_claims(resume_text: str) -> list[ClaimDraft]:
     for attempt in range(2):
         content = ""
         try:
-            response = chat(messages, max_tokens=1800 if attempt == 0 else 2500)
+            response = chat(messages, max_tokens=1800 if attempt == 0 else 2500, timeout=EXTRACT_TIMEOUT)
             content = response.content
             if response.finish_reason == "length":
                 raise ValueError("模型输出被截断")
