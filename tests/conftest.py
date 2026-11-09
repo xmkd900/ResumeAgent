@@ -9,6 +9,17 @@ from app.main import app
 from app.models import Base
 
 
+@pytest.fixture(autouse=True)
+def interview_graph_in_memory(monkeypatch):
+    """每个测试用独立的内存 checkpointer，避免图状态串场、也不落盘。"""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from app.services import interview_graph
+
+    graph = interview_graph.build_graph(InMemorySaver())
+    monkeypatch.setattr(interview_graph, "get_graph", lambda: graph)
+
+
 @pytest.fixture
 def session_factory():
     """每个测试一个独立的内存库；StaticPool 保证同一连接可见。"""

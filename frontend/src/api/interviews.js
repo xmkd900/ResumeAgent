@@ -9,7 +9,7 @@
  *   POST /interviews/{id}/finish         结束并生成评估
  *   POST /interviews/{id}/abort          中止（不计入评估）
  */
-import { http } from './client'
+import { getToken, http } from './client'
 
 export const interviewApi = {
   createInterview(payload) {
@@ -44,4 +44,72 @@ export const interviewApi = {
   listInterviews(params = {}) {
     return http.get('/interviews', { params }).then((response) => response.data)
   },
+}
+
+/**
+ * 流式提交回答（SSE）：逐节点推送进度，最后返回与 /answer 相同结构的结果。
+ *
+ * onEvent({ type: 'stage', node, status, detail }) 用于展示"正在判卷/检索"。
+ */
+export async function streamAnswer(id, answer, { onEvent, signal } = {}) {
+  const base = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+  const token = getToken()
+  const response = await fetch(`${base}/interviews/${id}/answer/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ answer }),
+    signal,
+  })
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}))
+    const message =
+      typeof payload.detail === 'string' ? payload.detail : `提交失败（${response.status}）`
+    throw new Error(message)
+  }
+  if (!response.body) throw new Error('当前浏览器不支持流式响应，请升级浏览器')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  let result = null
+
+  function handleFrame(frame) {
+    let event = 'message'
+    const dataLines = []
+    for (const line of frame.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim()
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+    }
+    if (!dataLines.length) return
+
+    const payload = JSON.parse(dataLines.join('\n'))
+    if (event === 'stage') {
+      onEvent?.({ type: 'stage', ...payload })
+    } else if (event === 'result') {
+      result = payload
+    } else if (event === 'error') {
+      throw new Error(payload.detail || '面试服务暂时不可用，请稍后重试')
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n')
+    let index = buffer.indexOf('\n\n')
+    while (index !== -1) {
+      const frame = buffer.slice(0, index)
+      buffer = buffer.slice(index + 2)
+      if (frame.trim()) handleFrame(frame)
+      index = buffer.indexOf('\n\n')
+    }
+  }
+
+  if (!result) throw new Error('流式响应提前结束，请重试')
+  return result
 }

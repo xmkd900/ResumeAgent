@@ -14,7 +14,7 @@ services:
       - "3307:3306"
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     restart: unless-stopped
     container_name: redis
     volumes:

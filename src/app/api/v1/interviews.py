@@ -1,4 +1,7 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_user
@@ -20,7 +23,9 @@ from app.services.interview import (
     get_interview_detail,
     list_interviews,
     pause_interview,
+    prepare_answer,
     resume_interview,
+    stream_answer,
     submit_answer,
 )
 from app.services.interview_director import DirectorError
@@ -95,6 +100,38 @@ def answer(
         )
     except (InterviewError, JudgeError, DirectorError) as exc:
         raise _http_error(exc) from exc
+
+
+@router.post("/{session_id}/answer/stream")
+def answer_stream(
+    session_id: int,
+    payload: AnswerRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """SSE：逐节点推送"正在判卷/检索/整理问题"，最后给出结果。
+
+    校验失败仍返回普通 HTTP 错误（还没开始流）；流中途失败用 event: error。
+    """
+    try:
+        session = prepare_answer(db, user_id=user.id, session_id=session_id)
+    except InterviewError as exc:
+        raise _http_error(exc) from exc
+
+    def event_stream():
+        for item in stream_answer(db, session, payload.answer):
+            data = json.dumps(item["data"], ensure_ascii=False)
+            yield f"event: {item['event']}\ndata: {data}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/{session_id}/pause", response_model=InterviewSessionDetailOut)

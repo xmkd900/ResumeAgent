@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "deepseek-chat"
     LLM_MOCK: bool = False  # 无 key 时自动使用启发式诊断
     LLM_TIMEOUT_SECONDS: int = 60
+    # LangGraph 执行位置（checkpoint）存 Redis；业务事实仍只在 MySQL
+    REDIS_URL: str = "redis://localhost:6380/0"
+    CHECKPOINT_TTL_MINUTES: int = 60 * 24 * 7
     DIAGNOSIS_PROMPT_VERSION: str = "diagnosis-v1"
 
 

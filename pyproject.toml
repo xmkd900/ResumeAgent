@@ -28,6 +28,8 @@ dependencies = [
     "pypdf>=6.21.4",
     "python-docx>=1.2.0",
     "openai>=3.42.1",
+    "langgraph>=1.0",
+    "langgraph-checkpoint-redis>=0.6.0",
 ]
 
 [project.scripts]

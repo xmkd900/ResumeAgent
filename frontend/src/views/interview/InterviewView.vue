@@ -1,14 +1,15 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowRight, Promotion, VideoPause, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowRight, Microphone, Promotion, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 
 import PageHeader from '@/components/PageHeader.vue'
 import ScoreRing from '@/components/ScoreRing.vue'
 import SectionCard from '@/components/SectionCard.vue'
 import { VERDICT_META } from '@/constants'
 import { useInterviewSession } from '@/composables/useInterviewSession'
+import { useSpeechInput } from '@/composables/useSpeechInput'
 
 const router = useRouter()
 const answer = ref('')
@@ -31,6 +32,7 @@ const {
   finishing,
   pausing,
   paused,
+  answerStage,
   error,
   asked,
   maxQuestions,
@@ -51,6 +53,49 @@ const {
 
 const BUDGET_OPTIONS = [6, 8, 10, 12, 16]
 
+// 语音输入：识别结果直接追加到输入框，不覆盖已经打好的字
+const {
+  supported: speechSupported,
+  listening,
+  interim: speechInterim,
+  error: speechError,
+  toggle: toggleSpeech,
+  stop: stopSpeech,
+} = useSpeechInput({ onFinal: appendSpeech })
+
+function appendSpeech(text) {
+  const current = answer.value.trim()
+  answer.value = current ? `${current} ${text}` : text
+}
+
+watch(paused, (value) => {
+  if (value) stopSpeech()
+})
+watch(stage, (value) => {
+  if (value !== 'ongoing') stopSpeech()
+})
+watch(speechError, (value) => {
+  if (value) ElMessage.warning(value)
+})
+
+let composing = false
+
+function handleCompositionStart() {
+  composing = true
+}
+
+function handleCompositionEnd() {
+  composing = false
+}
+
+function handleKeydown(event) {
+  if (event.key !== 'Enter') return
+  // 中文输入法选词时的 Enter 不能触发提交
+  if (event.isComposing || composing || event.shiftKey) return
+  event.preventDefault()
+  handleSubmit()
+}
+
 onMounted(loadResumes)
 
 async function handleStart() {
@@ -60,6 +105,7 @@ async function handleStart() {
 
 async function handleSubmit() {
   if (answering.value || paused.value) return
+  stopSpeech()
   const text = answer.value.trim()
   if (!text) {
     ElMessage.warning('先写下你的回答')
@@ -386,6 +432,10 @@ function verdictLabel(verdict) {
         </div>
 
         <div class="composer">
+          <div v-if="answering" class="composer__stage">
+            <span class="dot dot--live" />
+            <span>{{ answerStage || '面试官正在思考…' }}</span>
+          </div>
           <div v-if="paused" class="composer__paused">
             面试已暂停 · 点上方「继续面试」接着答
           </div>
@@ -399,18 +449,43 @@ function verdictLabel(verdict) {
             :disabled="answering || finishing || paused"
             placeholder="用自己的话回答，尽量给出因果、取舍与验证方式…"
             @keydown="handleKeydown"
+            @compositionstart="handleCompositionStart"
+            @compositionend="handleCompositionEnd"
           />
+          <div v-if="listening" class="composer__voice">
+            <span class="dot dot--live" />
+            <span>正在聆听，说完停顿一下会自动写入</span>
+            <em v-if="speechInterim">{{ speechInterim }}</em>
+          </div>
           <div class="composer__foot">
-            <span class="composer__hint">Enter 提交 · Shift + Enter 换行</span>
-            <el-button
-              type="primary"
-              :icon="Promotion"
-              :loading="answering"
-              :disabled="answering || finishing || !currentQuestion"
-              @click="handleSubmit"
-            >
-              提交回答
-            </el-button>
+            <span class="composer__hint">Enter 提交 · Shift + Enter 换行 · 语音识别为普通话</span>
+            <div class="composer__actions">
+              <el-tooltip
+                :content="speechSupported ? '语音输入（普通话）' : '当前浏览器不支持语音输入，建议用 Chrome / Edge'"
+                placement="top"
+              >
+                <span>
+                  <el-button
+                    v-if="speechSupported"
+                    :type="listening ? 'danger' : 'default'"
+                    :icon="Microphone"
+                    :disabled="answering || finishing || paused"
+                    @click="toggleSpeech"
+                  >
+                    {{ listening ? '停止' : '语音' }}
+                  </el-button>
+                </span>
+              </el-tooltip>
+              <el-button
+                type="primary"
+                :icon="Promotion"
+                :loading="answering"
+                :disabled="answering || finishing || !currentQuestion"
+                @click="handleSubmit"
+              >
+                提交回答
+              </el-button>
+            </div>
           </div>
         </div>
       </div>
@@ -983,6 +1058,18 @@ function verdictLabel(verdict) {
   background: var(--surface);
 }
 
+.composer__stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
 .composer__paused {
   margin-bottom: 10px;
   padding: 8px 12px;
@@ -1003,6 +1090,34 @@ function verdictLabel(verdict) {
 .composer__hint {
   font-size: 11px;
   color: var(--ink-4);
+}
+
+.composer__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.composer__voice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.composer__voice em {
+  font-style: normal;
+  color: var(--ink-3);
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------------- 评估摘要 ---------------- */

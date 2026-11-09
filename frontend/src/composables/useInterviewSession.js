@@ -1,10 +1,24 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
-import { interviewApi } from '@/api/interviews'
+import { interviewApi, streamAnswer } from '@/api/interviews'
 import { listResumes } from '@/api/resumes'
 
 export const INTERVIEW_POSITIONS = ['后端开发', '前端开发', 'Agent 开发']
+
+const STAGE_LABELS = {
+  judge: { start: '正在判卷…', done: '判卷完成，正在决定下一题…' },
+  director: { start: '正在决定下一题…', done: '方向已定，正在组织问题…' },
+  search: { start: '正在检索题库…', done: '已找到候选题，正在挑选…' },
+  compose: { start: '正在挑选最合适的一道…', done: '正在整理问法…' },
+  persist: { start: '正在整理问题…', done: '正在准备下一题…' },
+  finish: { start: '正在收尾评估…', done: '评估完成' },
+}
+
+function stageLabel(event) {
+  const entry = STAGE_LABELS[event.node]
+  return (entry && entry[event.status]) || '面试官正在思考…'
+}
 
 const DEFAULT_SUMMARY = {
   score: 0,
@@ -97,6 +111,7 @@ export function useInterviewSession() {
   const answering = ref(false)
   const finishing = ref(false)
   const pausing = ref(false)
+  const answerStage = ref('')
   const error = ref('')
 
   const asked = computed(() => Number(session.value?.asked_count) || 0)
@@ -221,7 +236,11 @@ export function useInterviewSession() {
     messages.value.push({ id: tempId, role: 'candidate', content, judgement: null })
 
     try {
-      const result = await interviewApi.submitAnswer(session.value.id, content)
+      const result = await streamAnswer(session.value.id, content, {
+        onEvent: (event) => {
+          if (event.type === 'stage') answerStage.value = stageLabel(event)
+        },
+      })
       const message = messages.value.find((item) => item.id === tempId)
       if (message) message.judgement = normalizeJudgement(result.judgement)
 
@@ -255,6 +274,7 @@ export function useInterviewSession() {
       return false
     } finally {
       answering.value = false
+      answerStage.value = ''
     }
   }
 
@@ -328,6 +348,7 @@ export function useInterviewSession() {
     finishing,
     pausing,
     paused,
+    answerStage,
     error,
     asked,
     maxQuestions,

@@ -26,3 +26,6 @@ pytest-cache-files-*/
 # Tooling caches
 .pytest_cache/
 .ruff_cache/
+
+tests
+docs
