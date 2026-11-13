@@ -78,13 +78,41 @@ class InterviewCreateRequest(BaseModel):
     max_questions: int | None = Field(default=None, ge=4, le=20)
 
 
+class JudgeEvidence(BaseModel):
+    """一条命中要点及其在回答中的原文依据（逐字摘录）。"""
+
+    point: str = ""
+    quote: str = ""
+
+
 class JudgementOut(BaseModel):
+    """单轮判卷结果。
+
+    字段分两类：
+    - 结果类（verdict/score/feedback）：前端直接展示；
+    - 过程类（dimensions/evidence/probe_*）：可解释、可复算，供面试官决策与复盘。
+    旧记录没有过程类字段，保持默认值即可反序列化。
+    """
+
     verdict: Verdict
     score: int = Field(default=0, ge=0, le=100)
     hit_points: list[str] = Field(default_factory=list)
     missing_points: list[str] = Field(default_factory=list)
     followup_hint: str = ""
     feedback: str = ""
+
+    # 维度得分（分点，不是 0-100）：覆盖 25 / 具体 25 / 推理 25 / 自证 15 / 结构 10
+    dimensions: dict[str, int] = Field(default_factory=dict)
+    evidence: list[JudgeEvidence] = Field(default_factory=list)
+    # recall 复述 / understood 讲得清原理 / applied 有动手细节 / reflective 能反思局限
+    depth: str = ""
+    probe_needed: bool = False
+    probe_target: str = ""
+    hedging: list[str] = Field(default_factory=list)
+    contradiction: str = "none"
+    declared_unknown: bool = False
+    # 分数被哪条硬规则压下来（便于调参与排障），如 "hedging>=3"
+    capped_by: str = ""
 
 
 class CurrentQuestionOut(BaseModel):
@@ -117,11 +145,14 @@ class InterviewTurnOut(BaseModel):
 
 class InterviewEvaluationOut(BaseModel):
     score: int
+    # strong_pass / pass / borderline / fail：来自能力项加权与硬门槛，不由模型决定
+    decision: str = ""
     headline: str
     description: str
     stats: list[dict] = Field(default_factory=list)
     strengths: list[str] = Field(default_factory=list)
     improvements: list[str] = Field(default_factory=list)
+    dimensions: list[dict] = Field(default_factory=list)
 
 
 class InterviewSessionOut(BaseModel):

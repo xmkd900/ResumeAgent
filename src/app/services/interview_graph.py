@@ -96,13 +96,25 @@ def route_after_load(state: InterviewState) -> str:
     return "judge" if (state.get("answer") or "").strip() else "await"
 
 
+def _claim_of(session: InterviewSession, claim_id: int | None) -> dict | None:
+    """从背景快照里取本轮对应的简历要点，供判卷核对"说的是不是简历里那件事"。"""
+    if claim_id is None:
+        return None
+    for claim in (session.briefing or {}).get("claims") or []:
+        if claim.get("id") == claim_id:
+            return claim
+    return None
+
+
 def judge_node(state: InterviewState, config) -> dict:
     db = _db(config)
     session = _session(db, state)
     turns = _turns(db, session)
     pending = engine.pending_turn(turns)
     if pending is None:
-        return {}
+        # 没有待答题还来判卷，说明前端重复提交或 checkpoint 与库不一致：
+        # 宁可报错，也不能凭空再生成一题（历史上出现过同一题被问两遍）
+        raise RuntimeError("当前没有待回答的问题，请刷新页面后继续")
 
     _emit("judge", "start")
     judgement = judge_answer(
@@ -110,6 +122,14 @@ def judge_node(state: InterviewState, config) -> dict:
         expected_points=list(pending.expected_points or []),
         rubric=dict(pending.rubric or {}),
         answer=state["answer"],
+        position=session.position,
+        claim=_claim_of(session, pending.claim_id),
+        history=[
+            {"question": turn.question, "answer": turn.answer, "verdict": turn.verdict}
+            for turn in turns
+            if turn.answer and turn.id != pending.id
+        ][-3:],
+        depth=pending.depth,
     )
     pending.answer = state["answer"]
     pending.judgement = judgement.model_dump()
@@ -117,7 +137,14 @@ def judge_node(state: InterviewState, config) -> dict:
     pending.score = judgement.score
     pending.answered_at = datetime.now()
     db.flush()
-    _emit("judge", "done", verdict=judgement.verdict, score=judgement.score)
+    _emit(
+        "judge",
+        "done",
+        verdict=judgement.verdict,
+        score=judgement.score,
+        dimensions=judgement.dimensions,
+        probe_needed=judgement.probe_needed,
+    )
     return {"judgement": judgement.model_dump()}
 
 
@@ -232,6 +259,20 @@ def persist_node(state: InterviewState, config) -> dict:
     decision = DirectorDecision(**state["decision"])
 
     _emit("persist", "start")
+
+    # 不变量：一题未答就不能再出新题。前端重复提交或 checkpoint 与库不一致时，
+    # 这里曾生成过"同一道题问两遍"，宁可把原题返回去也不能加题。
+    pending = engine.pending_turn(turns)
+    if pending is not None:
+        logger.warning(
+            "turn %s 仍未作答，跳过出题，继续等待同一个问题", pending.turn_index
+        )
+        return {
+            "question": {"question": pending.question, "competency": pending.competency},
+            "finished": False,
+            "turn_id": pending.id,
+        }
+
     payload = state.get("question") or engine.materialize(
         db, session=session, decision=decision, turns=turns
     )
@@ -370,22 +411,25 @@ def stream_answer_events(db: Session, session_id: int, answer: str):
     graph = get_graph()
     config = graph_config(db, session_id)
     snapshot = graph.get_state(config)
-    if snapshot.values:
+    # 只认"停在某个节点上"的 checkpoint（next 非空）。
+    # 图已经跑到 END 的线程再 resume 不会报错，而是静默返回终态——
+    # 上一轮事务回滚后可能出现这种"checkpoint 比 MySQL 走得快"的情况。
+    if snapshot.values and snapshot.next:
         payload = Command(resume={"answer": answer})
     else:
-        logger.info("session %s 没有 checkpoint，按初始状态执行", session_id)
+        logger.info("session %s 没有可续跑的 checkpoint，按初始状态执行", session_id)
         payload = {"session_id": session_id, "answer": answer}
 
     yield from graph.stream(payload, config, stream_mode=["updates", "custom"])
 
 
 def resume_with_answer(db: Session, session_id: int, answer: str) -> None:
-    """提交回答：有 checkpoint 就 resume，没有就用初始状态带 answer 跑。"""
+    """提交回答：有可续跑的 checkpoint 就 resume，否则用初始状态带 answer 跑。"""
     graph = get_graph()
     config = graph_config(db, session_id)
     snapshot = graph.get_state(config)
-    if snapshot.values:
+    if snapshot.values and snapshot.next:
         graph.invoke(Command(resume={"answer": answer}), config)
     else:
-        logger.info("session %s 没有 checkpoint，按初始状态执行", session_id)
+        logger.info("session %s 没有可续跑的 checkpoint，按初始状态执行", session_id)
         graph.invoke({"session_id": session_id, "answer": answer}, config)

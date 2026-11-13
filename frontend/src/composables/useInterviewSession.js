@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus'
 
 import { interviewApi, streamAnswer } from '@/api/interviews'
 import { listResumes } from '@/api/resumes'
+import { DIMENSION_META } from '@/constants'
 
 export const INTERVIEW_POSITIONS = ['后端开发', '前端开发', 'Agent 开发']
 
@@ -29,6 +30,19 @@ const DEFAULT_SUMMARY = {
   improvements: [],
 }
 
+function dimensionRows(raw) {
+  const source = (raw && raw.dimensions) || {}
+  return Object.keys(DIMENSION_META)
+    .filter((key) => key !== 'coverage' && source[key] !== undefined)
+    .map((key) => ({
+      key,
+      label: DIMENSION_META[key].label,
+      max: DIMENSION_META[key].max,
+      value: Number(source[key]) || 0,
+      percent: Math.round(((Number(source[key]) || 0) / DIMENSION_META[key].max) * 100),
+    }))
+}
+
 function normalizeJudgement(raw) {
   if (!raw) return null
   return {
@@ -38,6 +52,11 @@ function normalizeJudgement(raw) {
     misses: raw.missing_points || raw.misses || [],
     feedback: raw.feedback || '',
     hint: raw.followup_hint || '',
+    depth: raw.depth || '',
+    dimensions: dimensionRows(raw),
+    hedging: Array.isArray(raw.hedging) ? raw.hedging : [],
+    // 旧记录没有证据字段，保持空数组即可
+    evidence: Array.isArray(raw.evidence) ? raw.evidence : [],
   }
 }
 
@@ -81,11 +100,13 @@ function normalizeEvaluation(raw, session) {
   if (!raw) return null
   return {
     score: Number(raw.score) || 0,
+    decision: raw.decision || '',
     headline: raw.headline || DEFAULT_SUMMARY.headline,
     description: raw.description || session?.summary || '',
     stats: Array.isArray(raw.stats) ? raw.stats : [],
     strengths: Array.isArray(raw.strengths) ? raw.strengths : [],
     improvements: Array.isArray(raw.improvements) ? raw.improvements : [],
+    dimensions: Array.isArray(raw.dimensions) ? raw.dimensions : [],
   }
 }
 

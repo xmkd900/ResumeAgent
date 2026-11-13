@@ -7,7 +7,7 @@ import { ArrowRight, Microphone, Promotion, VideoPause, VideoPlay } from '@eleme
 import PageHeader from '@/components/PageHeader.vue'
 import ScoreRing from '@/components/ScoreRing.vue'
 import SectionCard from '@/components/SectionCard.vue'
-import { VERDICT_META } from '@/constants'
+import { DECISION_META, VERDICT_META } from '@/constants'
 import { useInterviewSession } from '@/composables/useInterviewSession'
 import { useSpeechInput } from '@/composables/useSpeechInput'
 
@@ -165,6 +165,20 @@ function clearError() {
 
 function verdictLabel(verdict) {
   return VERDICT_META[verdict]?.label || verdict
+}
+
+function decisionLabel(decision) {
+  return DECISION_META[decision]?.label || decision
+}
+
+function decisionTone(decision) {
+  return DECISION_META[decision]?.tone || 'warn'
+}
+
+function dimTone(percent) {
+  if (percent >= 75) return 'dim__fill--good'
+  if (percent >= 45) return 'dim__fill--warn'
+  return 'dim__fill--bad'
 }
 </script>
 
@@ -422,6 +436,18 @@ function verdictLabel(verdict) {
                   </ul>
                 </div>
               </div>
+              <div v-if="msg.judgement.dimensions.length" class="feedback__dims">
+                <div v-for="dim in msg.judgement.dimensions" :key="dim.key" class="dim">
+                  <span class="dim__label">{{ dim.label }}</span>
+                  <span class="dim__bar">
+                    <i class="dim__fill" :class="dimTone(dim.percent)" :style="{ width: `${dim.percent}%` }" />
+                  </span>
+                  <span class="dim__value num">{{ dim.value }}/{{ dim.max }}</span>
+                </div>
+              </div>
+              <p v-if="msg.judgement.hedging.length" class="feedback__hedge">
+                这段回答里有 {{ msg.judgement.hedging.length }} 处模糊表述：{{ msg.judgement.hedging.join('、') }}
+              </p>
               <p v-if="msg.judgement.feedback" class="feedback__note">{{ msg.judgement.feedback }}</p>
             </div>
           </template>
@@ -498,8 +524,30 @@ function verdictLabel(verdict) {
           <ScoreRing :score="summary.score" :size="124" label="本场表现" suffix="/ 100" />
           <div class="summary__copy">
             <p class="eyebrow">Session Summary</p>
-            <h2>{{ summary.headline }}</h2>
+            <div class="summary__title">
+              <h2>{{ summary.headline }}</h2>
+              <span
+                v-if="summary.decision"
+                class="pill"
+                :class="`decision decision--${decisionTone(summary.decision)}`"
+              >
+                {{ decisionLabel(summary.decision) }}
+              </span>
+            </div>
             <p class="summary__desc">{{ summary.description }}</p>
+            <div v-if="summary.dimensions.length" class="summary__dims">
+              <div v-for="dim in summary.dimensions" :key="dim.key" class="dim">
+                <span class="dim__label">{{ dim.label }}</span>
+                <span class="dim__bar">
+                  <i
+                    class="dim__fill"
+                    :class="dimTone(Math.round((dim.score / dim.max) * 100))"
+                    :style="{ width: `${Math.round((dim.score / dim.max) * 100)}%` }"
+                  />
+                </span>
+                <span class="dim__value num">{{ dim.score }}/{{ dim.max }}</span>
+              </div>
+            </div>
             <div class="summary__stats">
               <div v-for="stat in summary.stats" :key="stat.label" class="summary__stat">
                 <span class="summary__stat-label">{{ stat.label }}</span>
@@ -981,6 +1029,94 @@ function verdictLabel(verdict) {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+/* 维度条：用分点而不是百分比，避免"85 分"给人虚高的错觉 */
+.feedback__dims {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.dim {
+  display: grid;
+  grid-template-columns: 52px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+}
+
+.dim__label {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.dim__bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.dim__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.dim__fill--good {
+  background: #14b8a6;
+}
+
+.dim__fill--warn {
+  background: #e0a03a;
+}
+
+.dim__fill--bad {
+  background: #d4685f;
+}
+
+.dim__value {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  text-align: right;
+}
+
+.feedback__hedge {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #96600f;
+}
+
+.summary__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.summary__dims {
+  margin-top: 14px;
+  display: grid;
+  gap: 6px;
+  max-width: 420px;
+}
+
+.decision--success {
+  background: var(--accent-soft);
+  color: #0b7269;
+}
+
+.decision--warn {
+  background: var(--warn-soft);
+  color: #96600f;
+}
+
+.decision--danger {
+  background: var(--danger-soft);
+  color: #b03e3d;
 }
 
 .feedback__title {

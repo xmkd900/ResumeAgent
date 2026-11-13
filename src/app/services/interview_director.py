@@ -88,9 +88,11 @@ class BriefingResult(BaseModel):
 
 class DirectorDecision(BaseModel):
     """面试官决策结果。
-    
+
     Attributes:
         action: 动作类型（ask/followup/search_bank/finish）
+        followup_kind: 追问类型（verify 验真 / deepen 加深 / clarify 澄清）
+        probe_quote: 追问锚定的候选人原话
         reason: 决策原因
         competency: 考察能力项
         anchor: 问题来源（resume/jd/bank/general）
@@ -101,7 +103,10 @@ class DirectorDecision(BaseModel):
         search_competency: 检索能力项
         search_difficulty: 检索难度
     """
+
     action: str = "ask"
+    followup_kind: str = "deepen"
+    probe_quote: str | None = None
     reason: str = ""
     competency: str = ""
     anchor: str = "general"
@@ -335,17 +340,35 @@ DIRECTOR_SYSTEM_PROMPT = """你是一场技术模拟面试的面试官，正在�
 ## 判断依据
 - 简历要点是主线：项目要问透，写了的数字要问来源；
 - 岗位要求决定能力覆盖；
-- 已问记录和判卷结果决定下一步：答得浅就往下追，答错了先给一次澄清机会，答好了换方向或加难度；
+- 判卷结果里除了分数，还有三个关键信号：
+  · depth：recall 只会复述 / understood 讲得清原理 / applied 有动手细节 / reflective 能反思局限；
+  · probe_needed：这段回答里最经不起追问的那一点（probe_target）；
+  · hedging：他用了多少"好像是 / 记不清 / 大概"这类模糊限定。
+- **只要上一轮 probe_needed=true，这一轮就必须追问验真，不许换话题**——
+  这是区分"真做过"和"背过"的唯一办法。只有连续追问到 3 层仍无进展，才允许换方向。
 - 题库能力分布告诉你"还有哪些方向可以考"。需要一道结构化题目（八股/场景）时用 search_bank，否则直接按简历/JD 提问。
+
+## 追问三型（followup_kind 必须填）
+- verify 验真：揪住他说的具体表述要细节——"这个 QPS 是在什么压测条件下跑出来的？"
+- deepen 加深：答对了往下压边界/失败/规模——"如果这时候锁过期了会发生什么？"
+- clarify 澄清：答非所问或前后矛盾时，先给一次说清楚的机会。
 
 ## 提问原则
 1. 第 1 题必须是开场：自我介绍或讲最相关的一段经历，不考八股。
 2. 简历优先：挑还没问过的项目，按"背景→职责→技术难点→为什么这么选→怎么验证→出事怎么办"推进，但每次只取一个点。
 3. 简历没体现、但岗位要求的能力，用题库补；优先没覆盖过的 competency。
-4. 追问必须锚定上一轮回答里的具体词：他说"加了缓存"，就问一致性；他说"做了优化"，就问指标怎么测。
-5. 一次只问一个问题，口语化，1-3 句。**一句话只能有一个问号**，不要用"另外/同时/以及"再追加第二个小问；不要报题型，不要暴露评分标准。
+4. 追问必须锚定上一轮回答里的具体词（probe_quote 抄原话）：他说"加了缓存"，就问一致性；
+   他说"做了优化"，就问指标怎么测。不要用"具体说说"这种空追问。
+5. 一次只问一个问题，口语化，1-3 句。**一句话只能有一个问号**，不要用"另外/同时/以及"再追加第二个小问；
+   不要报题型，不要说"这题考察的是"，不要提示答案。
 6. 不要重复已问过的问题；除追问外，不要连续两题考同一个 competency。
-7. 收尾：核心能力已覆盖、简历项目已问透、或预算用完。宁可少问，不要为凑数硬问。
+7. 难度跟着表现走：答得扎实就加压（规模、边界、故障成本）；答得含糊就下钻到具体场景，
+   不要在同一个层次换同义词重问一遍。
+8. 收尾：核心能力已覆盖、简历项目已问透、或预算用完。宁可少问，不要为凑数硬问。
+
+## expected_points 怎么写
+写 2-4 条**可以核对**的答案要素：具体做法、关键取舍、怎么验证、出问题怎么兜。
+不要写"了解 XXX""熟悉原理"这种名词短语——如果候选人只要蹦出这个词就算命中，这条要点就写废了。
 
 ## 反面例子（不要这样）
 上一轮问"订单系统怎么做的"，候选人答"用了 Redis 做缓存，QPS 从 800 提到 3000"。
@@ -363,12 +386,14 @@ DIRECTOR_SYSTEM_PROMPT = """你是一场技术模拟面试的面试官，正在�
 ## 输出 JSON
 {
   "action": "ask | followup | search_bank | finish",
+  "followup_kind": "verify | deepen | clarify",
+  "probe_quote": "追问锚定的候选人原话（followup 必填）",
   "reason": "一句话说明为什么现在问这个",
   "competency": "考察的能力项",
   "anchor": "resume | jd | bank | general",
   "claim_id": 12,
   "question": "要问的话（ask/followup 必填）",
-  "expected_points": ["好回答应该覆盖的点，2-5 条"],
+  "expected_points": ["可核对的具体做法/取舍/验证方式", "2-4 条"],
   "search_query": "检索词（search_bank 必填）",
   "search_competency": "限定能力项，可空",
   "search_difficulty": "junior | mid | senior，可空"
@@ -432,10 +457,10 @@ def _render_catalog(briefing: dict, covered: set[str]) -> str:
 
 def _render_turns(turns: list[InterviewTurn]) -> str:
     """渲染最近8轮问答记录。
-    
+
     Args:
         turns: 所有回合列表
-    
+
     Returns:
         格式化的问答记录文本
     """
@@ -452,12 +477,32 @@ def _render_turns(turns: list[InterviewTurn]) -> str:
         )
         if turn.answer:
             judged = turn.verdict or "未判"
+            detail = ""
             gap = ""
+            probe = ""
+            hedge = ""
             if isinstance(turn.judgement, dict):
+                dims = turn.judgement.get("dimensions") or {}
+                if dims:
+                    detail = (
+                        f"（具体{dims.get('specificity', 0)}/25"
+                        f" 推理{dims.get('reasoning', 0)}/25"
+                        f" 自证{dims.get('authenticity', 0)}/15）"
+                    )
                 misses = turn.judgement.get("missing_points") or []
                 if misses:
                     gap = "；缺口: " + "、".join(str(item) for item in misses[:3])
-            head += f"\n   答: {_squash(turn.answer, 200)}\n   判卷: {judged}{gap}"
+                words = turn.judgement.get("hedging") or []
+                if words:
+                    hedge = "；模糊词: " + "、".join(str(item) for item in words[:4])
+                if turn.judgement.get("probe_needed"):
+                    probe = str(turn.judgement.get("probe_target") or "").strip()
+            head += (
+                f"\n   答: {_squash(turn.answer, 200)}"
+                f"\n   判卷: {judged}{detail}{gap}{hedge}"
+            )
+            if probe:
+                head += f"\n   待验真: {probe}"
         lines.append(head)
     return "\n".join(lines) or "（还没有提问）"
 
@@ -488,6 +533,21 @@ def _asked_claim_ids(turns: list[InterviewTurn]) -> set[int]:
         已问过的声明ID集合
     """
     return {turn.claim_id for turn in turns if turn.claim_id is not None}
+
+
+def _pending_probe(turns: list[InterviewTurn]) -> str:
+    """上一轮回答里最该验真的那一点；没有就返回空串。
+
+    追问深度到 3 层还没问出来，基本可以判定这块是空的，
+    再往下钻只会变成拷问，所以到此为止。
+    """
+    last_answered = next((turn for turn in reversed(turns) if turn.answer), None)
+    if last_answered is None or last_answered.depth >= 3:
+        return ""
+    judgement = last_answered.judgement or {}
+    if not judgement.get("probe_needed"):
+        return ""
+    return str(judgement.get("probe_target") or "").strip()
 
 
 def decide(
@@ -521,6 +581,7 @@ def decide(
     last_answered = next(
         (turn for turn in reversed(turns) if turn.answer), None
     )
+    pending_probe = _pending_probe(turns)
 
     state = (
         f"【岗位】{briefing.get('position') or ''}\n"
@@ -534,6 +595,7 @@ def decide(
         f"【当前待答】{'有，还没回答' if unanswered else '无'}\n"
         f"【最近一次回答】"
         f"{_squash(last_answered.answer, 300) if last_answered and last_answered.answer else '（无）'}\n"
+        f"【待验真】{pending_probe or '无，这段回答没有明显站不住的地方'}\n"
     )
     if note:
         state += f"\n【系统提示】{note}\n"
@@ -567,6 +629,21 @@ def decide(
                 logger.info("决策被护栏拒绝，带上提示重试：%s", exc)
                 continue
             raise
+
+        # 上一轮回答有站不住的表述却想换话题：这是一场面试"变水"的主要出口，先拦一次
+        if (
+            pending_probe
+            and decision.action in {"ask", "search_bank"}
+            and attempt == 0
+        ):
+            current_note = (
+                "上一轮回答里有未经证实的表述：" + pending_probe +
+                "。请先追问这一点（action=followup，followup_kind=verify），"
+                "并在 probe_quote 里抄一句他的原话，不要换话题。"
+            )
+            last_error = DirectorError(current_note)
+            logger.info("面试官想换话题，但上一轮有未验证表述，要求先追问")
+            continue
 
         # 太早收尾时给模型一次机会重新考虑；仍坚持则尊重它的判断
         if (
@@ -652,6 +729,9 @@ def _sanitize_decision(
         updates["expected_points"] = [
             _squash(item, 120) for item in decision.expected_points if str(item).strip()
         ][:5]
+    kind = (decision.followup_kind or "").strip().lower()
+    updates["followup_kind"] = kind if kind in {"verify", "deepen", "clarify"} else "deepen"
+    updates["probe_quote"] = _squash(decision.probe_quote or "", 120) or None
     return decision.model_copy(update=updates)
 
 
@@ -732,11 +812,16 @@ def choose_from_bank(
 EVALUATION_SYSTEM_PROMPT = """你是刚结束一场技术面试的面试官，需要给候选人一份简短、具体、可行动的复盘。
 
 要求：
-1. headline 不超过 30 字，点出这场最突出的特征；
-2. description 2-3 句，说明整体表现与原因，引用具体题目或回答细节；
-3. strengths 2-4 条，必须是这场里确实出现过的表现；
-4. improvements 2-4 条，必须能指导下一场怎么答，不要写"多练习"这种空话；
-5. 不虚构未出现的内容；语气客观，不吹捧也不打击。
+1. headline 不超过 30 字，点出这场最突出的特征，不要写"表现不错"这类通用话；
+2. description 2-3 句，说明整体表现与原因，必须引用具体题目或候选人原话；
+3. strengths 2-4 条，只能是这场里确实出现过的表现，并且能指到证据；
+   "沟通逻辑清晰""基础扎实"这类没有依据的评价不许写；
+4. improvements 2-4 条，必须写成"下一场遇到 X 问题怎么答"，
+   禁止"多练习""加强深度""多总结"这种放之四海皆准的空话；
+5. 判卷里标了"模糊表述""只有概念没有亲历"的能力项，必须在 improvements 里点名，
+   并说明缺的是哪个具体细节（数字来源、取舍理由、失败处理）；
+6. 候选人明确承认不会的项，如实写"未掌握"，不要包装成"有待提升"；
+7. 不虚构未出现的内容；语气客观，不吹捧也不打击。
 
 输出 JSON：
 {"headline": "...", "description": "...", "strengths": ["..."], "improvements": ["..."]}"""
@@ -748,15 +833,19 @@ def write_evaluation(
     turns: list[InterviewTurn],
     score: int,
     covered: list[str],
+    dimensions: dict | None = None,
+    unanswered: int = 0,
 ) -> EvaluationNarrative:
     """生成面试评估文案。
-    
+
     Args:
         position: 岗位名称
         turns: 所有回合列表
         score: 总分
         covered: 覆盖的能力维度列表
-    
+        dimensions: 各维度平均得分（用于校准语气与点名短板）
+        unanswered: 未作答轮数
+
     Returns:
         评估文案对象
     """
@@ -765,18 +854,42 @@ def write_evaluation(
         if not turn.answer:
             continue
         gaps = ""
+        signals = ""
         if isinstance(turn.judgement, dict):
             misses = turn.judgement.get("missing_points") or []
             if misses:
                 gaps = "；缺口: " + "、".join(str(item) for item in misses[:3])
+            words = turn.judgement.get("hedging") or []
+            if words:
+                signals += "；模糊表述: " + "、".join(str(item) for item in words[:3])
+            if turn.judgement.get("declared_unknown"):
+                signals += "；明确表示不会"
+            if turn.judgement.get("contradiction") in {"minor", "major"}:
+                signals += "；前后不一致"
         lines.append(
             f"{turn.turn_index}. [{turn.competency}] {_squash(turn.question, 100)}\n"
             f"   答: {_squash(turn.answer, 220)}\n"
-            f"   判卷: {turn.verdict or '未判'}（{turn.score if turn.score is not None else '-'} 分）{gaps}"
+            f"   判卷: {turn.verdict or '未判'}（{turn.score if turn.score is not None else '-'} 分）{gaps}{signals}"
         )
+
+    dim_lines = ""
+    if dimensions:
+        labels = {
+            "coverage": "要点覆盖",
+            "specificity": "具体程度",
+            "reasoning": "推理深度",
+            "authenticity": "经历自证",
+            "clarity": "表达结构",
+        }
+        dim_lines = "；".join(
+            f"{labels.get(key, key)} {value}" for key, value in dimensions.items()
+        )
+
     user = (
         f"【岗位】{position}\n"
         f"【系统计算的总分】{score}/100（只用于校准语气，不要直接复述）\n"
+        f"【维度均分】{dim_lines or '无'}\n"
+        f"【未作答】{unanswered} 题\n"
         f"【覆盖能力】{'、'.join(covered) or '无'}\n"
         f"【面试记录】\n{chr(10).join(lines) or '（候选人没有作答）'}"
     )

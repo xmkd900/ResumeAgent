@@ -26,6 +26,23 @@ export const VERDICT_META = {
   bad: { label: '需要补强', tone: 'danger' },
 }
 
+/** 判卷维度（分点，不是百分比）→ 展示文案与满分 */
+export const DIMENSION_META = {
+  coverage: { label: '要点覆盖', max: 25 },
+  specificity: { label: '具体程度', max: 25 },
+  reasoning: { label: '推理深度', max: 25 },
+  authenticity: { label: '经历自证', max: 15 },
+  clarity: { label: '表达结构', max: 10 },
+}
+
+/** 整场结论：来自能力项加权与核心项门槛，不由模型决定 */
+export const DECISION_META = {
+  strong_pass: { label: '通过 · 表现扎实', tone: 'success' },
+  pass: { label: '通过 · 可进下一轮', tone: 'success' },
+  borderline: { label: '边缘 · 看岗位竞争', tone: 'warn' },
+  fail: { label: '未通过 · 核心项未达标', tone: 'danger' },
+}
+
 /** weak_point.source 枚举 → 中文 */
 export const WEAK_SOURCE_LABELS = {
   interview: '模拟面试',

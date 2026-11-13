@@ -20,8 +20,12 @@ from app.services.interview_director import choose_from_bank, write_evaluation
 logger = logging.getLogger(__name__)
 
 DUPLICATE_RATIO = 0.86
+_SAME_TOPIC_RATIO = 0.55  # 同一能力项内的换皮重问，阈值可以更严一点
 _VERDICT_SCORE = {"good": 88, "partial": 72, "bad": 45}
 _COMPOUND_MARKERS = ("另外", "同时想", "以及", "顺便问", "还有就是")
+# 追问更能证明真实深度：越往下问，权重越高
+_DEPTH_WEIGHT = 0.25
+_MAX_DEPTH_WEIGHT = 4
 
 
 def turns_of(db: Session, session_id: int) -> list[InterviewTurn]:
@@ -44,17 +48,29 @@ def _normalize(text: str) -> str:
     return re.sub(r"[\s，。？！、,.?!:：；;\"'“”‘’]", "", (text or "")).lower()
 
 
-def too_similar(text: str, turns: list[InterviewTurn]) -> bool:
+def too_similar(text: str, turns: list[InterviewTurn], competency: str = "") -> bool:
+    """判断是否在换皮重问。
+
+    除了整体相似度，还要拦住"同一能力项里换个说法再问一遍"——
+    历史 bug：B+ 树那道题被问了两次，两条 diff 相似度只有 0.63，逃过了 0.86 的阈值。
+    """
     candidate = _normalize(text)
     if not candidate:
         return True
+    topic = _normalize(competency)
     for turn in turns:
         existing = _normalize(turn.question)
         if not existing:
             continue
         if candidate == existing:
             return True
-        if difflib.SequenceMatcher(None, candidate, existing).ratio() >= DUPLICATE_RATIO:
+        ratio = difflib.SequenceMatcher(None, candidate, existing).ratio()
+        if ratio >= DUPLICATE_RATIO:
+            return True
+        same_topic = bool(topic) and (
+            topic in _normalize(turn.competency) or _normalize(turn.competency) in topic
+        )
+        if same_topic and ratio >= _SAME_TOPIC_RATIO:
             return True
     return False
 
@@ -156,6 +172,7 @@ def materialize(
             "source": last.source if last else "generated",
             "action": "followup",
             "depth": (last.depth if last else 0) + 1,
+            "followup_kind": getattr(decision, "followup_kind", "") or "deepen",
         }
 
     if decision.action == "search_bank":
@@ -180,7 +197,7 @@ def payload_problem(payload: dict, turns: list[InterviewTurn]) -> str | None:
     """返回不可入库的原因；None 表示通过。供"带提示重来一次"使用。"""
     if not payload.get("question"):
         return "上一个决策没有问题文本，请给出具体要问的一句话"
-    if too_similar(payload["question"], turns):
+    if too_similar(payload["question"], turns, payload.get("competency") or ""):
         return "这个问题和已问过的题目重复，请换一个角度、能力项或更深一层"
     # 题库原题由人工维护，允许多个小问；现场生成的必须一次只问一个
     if (
@@ -201,6 +218,14 @@ def create_turn(
     payload: dict,
 ) -> InterviewTurn:
     """写入一轮问题并推进计数与覆盖统计。"""
+    rationale = None
+    if decision is not None:
+        reason = (decision.reason or "").strip()
+        if payload["action"] == "followup":
+            kind = payload.get("followup_kind") or "deepen"
+            rationale = f"[{kind}] {reason}".strip()
+        else:
+            rationale = reason or None
     turn = InterviewTurn(
         session_id=session.id,
         turn_index=session.asked_count + 1,
@@ -210,7 +235,7 @@ def create_turn(
         depth=payload["depth"],
         competency=payload["competency"],
         question=payload["question"],
-        rationale=(decision.reason or None) if decision is not None else None,
+        rationale=rationale,
         expected_points=payload["expected_points"],
         rubric=payload["rubric"],
         question_id=payload["question_id"],
@@ -265,25 +290,128 @@ def _heuristic_narrative(turns: list[InterviewTurn], score: int) -> dict:
     }
 
 
+def _turn_score(turn: InterviewTurn) -> int:
+    if turn.score is not None:
+        return int(turn.score)
+    return _VERDICT_SCORE.get(turn.verdict or "", 50)
+
+
+def competency_scores(turns: list[InterviewTurn]) -> dict[str, float]:
+    """按能力项聚合：同一能力项被追问得越深，那一轮权重越高。
+
+    这样"先说对个大概、被追两层就露馅"不会因为轮次多而被平均稀释。
+    """
+    groups: dict[str, list[tuple[int, float]]] = {}
+    for turn in turns:
+        if not turn.answer:
+            continue
+        competency = turn.competency or "综合"
+        weight = 1 + _DEPTH_WEIGHT * min(int(turn.depth or 0), _MAX_DEPTH_WEIGHT)
+        groups.setdefault(competency, []).append((_turn_score(turn), weight))
+    return {
+        competency: sum(score * weight for score, weight in items)
+        / sum(weight for _, weight in items)
+        for competency, items in groups.items()
+    }
+
+
+def _jd_weight_sets(briefing: dict | None) -> tuple[set[str], set[str]]:
+    must: set[str] = set()
+    nice: set[str] = set()
+    for item in (briefing or {}).get("jd_requirements") or []:
+        competency = str(item.get("competency") or "").strip()
+        if not competency:
+            continue
+        (must if item.get("kind") == "must" else nice).add(competency)
+    return must, nice
+
+
+def aggregate_score(
+    *, turns: list[InterviewTurn], briefing: dict | None
+) -> tuple[int, str, list[str], dict[str, float]]:
+    """把每轮分数折成一个总分与结论。
+
+    规则（可复算，不依赖模型）：
+    1. 先按能力项聚合，追问轮权重更高；
+    2. JD 里 must 的能力项权重 3、nice 的 1.5、其余 1；
+    3. 硬门槛：must 能力项有作答但低于 55 分，总分封顶 64（真实面试里核心项不过就是不过）；
+    4. 信息不足：超过三分之一的问题没答，总分封顶 60。
+    """
+    answered = [turn for turn in turns if turn.answer]
+    per_competency = competency_scores(answered)
+    if not per_competency:
+        return 0, "fail", ["本场没有有效作答"], {}
+
+    must, nice = _jd_weight_sets(briefing)
+    weights = {
+        competency: 3.0 if competency in must else 1.5 if competency in nice else 1.0
+        for competency in per_competency
+    }
+    total_weight = sum(weights.values())
+    score = round(
+        sum(per_competency[c] * weights[c] for c in per_competency) / total_weight
+    )
+    notes: list[str] = []
+
+    failed_must = [c for c in per_competency if c in must and per_competency[c] < 55]
+    if failed_must:
+        score = min(score, 64)
+        notes.append("核心能力未达标：" + "、".join(failed_must))
+
+    unanswered = len([turn for turn in turns if not turn.answer])
+    if len(turns) >= 4 and unanswered / len(turns) > 1 / 3:
+        score = min(score, 60)
+        notes.append(f"{unanswered} 道题未作答，评估信息不足")
+
+    score = max(0, min(100, score))
+    decision = (
+        "strong_pass" if score >= 85
+        else "pass" if score >= 75
+        else "borderline" if score >= 65
+        else "fail"
+    )
+    return score, decision, notes, per_competency
+
+
+def dimension_averages(turns: list[InterviewTurn]) -> dict[str, float]:
+    """各维度平均分（原始分点），用于报告里指出短板。"""
+    total: dict[str, float] = {}
+    count = 0
+    for turn in turns:
+        if not turn.answer or not isinstance(turn.judgement, dict):
+            continue
+        dims = turn.judgement.get("dimensions") or {}
+        if not dims:
+            continue
+        count += 1
+        for key, value in dims.items():
+            total[key] = total.get(key, 0) + float(value or 0)
+    if not count:
+        return {}
+    return {key: round(value / count, 1) for key, value in total.items()}
+
+
 def build_evaluation(db: Session, session: InterviewSession) -> InterviewEvaluationOut:
-    """总分由每轮得分求均值（可复算），文案由模型写（失败降级）。"""
+    """总分由能力项加权得出（可复算），文案由模型写（失败降级）。"""
     turns = turns_of(db, session.id)
     answered = [turn for turn in turns if turn.answer]
 
-    scores = [
-        turn.score if turn.score is not None else _VERDICT_SCORE.get(turn.verdict or "", 50)
-        for turn in answered
-    ]
-    score = round(sum(scores) / len(scores)) if scores else 0
-    score = max(0, min(100, score))
+    score, decision, notes, _per_competency = aggregate_score(
+        turns=turns, briefing=session.briefing
+    )
+    dims = dimension_averages(answered)
+    unanswered = len([turn for turn in turns if not turn.answer])
 
     covered = covered_competencies(session)
     hits = 0
     total_points = 0
+    hedged = 0
     for turn in answered:
         total_points += len(turn.expected_points or [])
         if isinstance(turn.judgement, dict):
             hits += len(turn.judgement.get("hit_points") or [])
+            if turn.judgement.get("hedging"):
+                hedged += 1
 
     try:
         narrative = write_evaluation(
@@ -291,28 +419,59 @@ def build_evaluation(db: Session, session: InterviewSession) -> InterviewEvaluat
             turns=turns,
             score=score,
             covered=covered,
+            dimensions=dims,
+            unanswered=unanswered,
         )
         data = narrative.model_dump()
     except Exception as exc:  # noqa: BLE001  评估文案失败不能把用户卡在面试里
         logger.warning("评估文案生成失败，改用规则摘要：%s", exc)
         data = _heuristic_narrative(turns, score)
 
+    improvements = list(data.get("improvements") or [])
+    for note in notes:
+        if note not in improvements:
+            improvements.append(note)
+
+    dimension_rows = [
+        {
+            "key": key,
+            "label": {
+                "coverage": "要点覆盖",
+                "specificity": "具体程度",
+                "reasoning": "推理深度",
+                "authenticity": "经历自证",
+                "clarity": "表达结构",
+            }.get(key, key),
+            "score": value,
+            "max": {"coverage": 25, "specificity": 25, "reasoning": 25, "authenticity": 15, "clarity": 10}[key],
+        }
+        for key, value in dims.items()
+    ]
+
+    stats = [
+        {"label": "回答轮次", "value": str(len(answered)), "suffix": "轮"},
+        {"label": "覆盖能力", "value": str(len(covered)), "suffix": "项"},
+        {
+            "label": "要点覆盖",
+            "value": f"{hits}/{total_points}" if total_points else "—",
+            "suffix": "",
+        },
+        {"label": "追问", "value": str(session.asked_followups), "suffix": "次"},
+    ]
+    if hedged:
+        stats.append({"label": "模糊表述", "value": str(hedged), "suffix": "轮"})
+    if unanswered:
+        stats.append({"label": "未作答", "value": str(unanswered), "suffix": "题"})
+
     return InterviewEvaluationOut(
         score=score,
+        decision=decision,
         headline=data.get("headline") or "本场面试已完成",
         description=data.get("description") or "",
-        stats=[
-            {"label": "回答轮次", "value": str(len(answered)), "suffix": "轮"},
-            {"label": "覆盖能力", "value": str(len(covered)), "suffix": "项"},
-            {
-                "label": "要点覆盖",
-                "value": f"{hits}/{total_points}" if total_points else "—",
-                "suffix": "",
-            },
-            {"label": "追问", "value": str(session.asked_followups), "suffix": "次"},
-        ],
+        stats=stats,
         strengths=data.get("strengths") or [],
-        improvements=data.get("improvements") or [],
+        improvements=improvements[:5],
+        dimensions=dimension_rows,
     )
 
 
