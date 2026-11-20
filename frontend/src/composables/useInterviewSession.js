@@ -50,6 +50,8 @@ function normalizeJudgement(raw) {
     score: Number(raw.score) || 0,
     hits: raw.hit_points || raw.hits || [],
     misses: raw.missing_points || raw.misses || [],
+    // 部分覆盖：说到了方向但缺关键限定，和"没答"分开显示
+    partials: raw.partial_points || [],
     feedback: raw.feedback || '',
     hint: raw.followup_hint || '',
     depth: raw.depth || '',

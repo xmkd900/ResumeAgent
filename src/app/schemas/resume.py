@@ -13,6 +13,8 @@ class IssueOut(BaseModel):
     severity: Literal["high", "medium", "low"]
     dimension: str = ""
     quote: str = ""
+    # 引用是否已在简历原文中定位；False 表示模型给的句子找不到，前端可提示"未定位到原文"
+    quote_verified: bool = True
     problem: str
     rewritten: str = ""
 

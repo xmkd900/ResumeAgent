@@ -24,6 +24,7 @@ from app.schemas.interview import (
     InterviewTurnOut,
     JudgementOut,
 )
+from app.services import growth
 from app.services import interview_engine as engine
 from app.services.claim_extraction import ClaimExtractionError, extract_claims, sync_claims
 from app.services.interview_context import (
@@ -195,6 +196,19 @@ def create_interview(
     )
     if weak_dimensions:
         briefing["weak_dimensions"] = weak_dimensions
+
+    # 成长闭环：把"已修复且到期"的缺口带进这场面试，让面试官用变体题复查
+    due_points = growth.due_weak_points(db, user_id=user_id, limit=3)
+    if due_points:
+        briefing["due_weak_points"] = [
+            {
+                "weak_point_id": point.id,
+                "topic": point.topic,
+                "gap_point": point.gap_point,
+                "stage": point.review_stage,
+            }
+            for point in due_points
+        ]
     # existing 已有 / extracted 本次补抽 / failed 抽取失败降级 / none 无简历
     briefing["claims_source"] = claims_source
 

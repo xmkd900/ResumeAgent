@@ -12,7 +12,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import InterviewQuestion, InterviewSession, InterviewTurn
+from app.models import InterviewQuestion, InterviewSession, InterviewTurn, WeakPoint
 from app.schemas.interview import InterviewEvaluationOut
 from app.services.interview_context import resolve_domain, search_bank
 from app.services.interview_director import choose_from_bank, write_evaluation
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 DUPLICATE_RATIO = 0.86
 _SAME_TOPIC_RATIO = 0.55  # 同一能力项内的换皮重问，阈值可以更严一点
 _VERDICT_SCORE = {"good": 88, "partial": 72, "bad": 45}
-_COMPOUND_MARKERS = ("另外", "同时想", "以及", "顺便问", "还有就是")
+_COMPOUND_MARKERS = ("另外", "同时想问", "还想问", "再问", "顺便问", "还有就是", "第二个问题")
 # 追问更能证明真实深度：越往下问，权重越高
 _DEPTH_WEIGHT = 0.25
 _MAX_DEPTH_WEIGHT = 4
@@ -157,6 +157,27 @@ def payload_from_bank_choice(db: Session, *, decision, choice) -> dict:
 def materialize(
     db: Session, *, session: InterviewSession, decision, turns: list[InterviewTurn]
 ) -> dict:
+    """把决策变成可直接入库的问题，并处理"复查缺口"的要点注入。"""
+    payload = _materialize_payload(db, session=session, decision=decision, turns=turns)
+    review_id = getattr(decision, "review_weak_point_id", None)
+    payload["review_weak_point_id"] = review_id
+    if review_id:
+        weak_point = db.get(WeakPoint, int(review_id))
+        gap = (weak_point.gap_point or "").strip() if weak_point is not None else ""
+        if weak_point is not None and gap:
+            points = [str(item) for item in (payload.get("expected_points") or [])]
+            payload["expected_points"] = [gap] + [
+                item for item in points if item.strip() and item.strip() != gap
+            ]
+            payload["review_weak_point_id"] = weak_point.id
+        else:
+            payload["review_weak_point_id"] = None
+    return payload
+
+
+def _materialize_payload(
+    db: Session, *, session: InterviewSession, decision, turns: list[InterviewTurn]
+) -> dict:
     """把决策变成一条可直接入库的问题（含追问继承与来源标注）。"""
     last = turns[-1] if turns else None
 
@@ -240,6 +261,7 @@ def create_turn(
         rubric=payload["rubric"],
         question_id=payload["question_id"],
         claim_id=payload["claim_id"],
+        review_weak_point_id=payload.get("review_weak_point_id"),
     )
     db.add(turn)
     db.flush()
@@ -315,6 +337,26 @@ def competency_scores(turns: list[InterviewTurn]) -> dict[str, float]:
     }
 
 
+def _matches_any(competency: str, bucket: set[str]) -> bool:
+    """能力项匹配：容忍 "MySQL" / "MySQL索引" 这类包含关系。
+
+    真实判卷里能力项由模型现场命名，完全相等太脆弱——岗位要求写 MySQL，
+    轮次写 MySQL索引，不应该被当成两个无关能力。
+    """
+    name = (competency or "").strip()
+    if not name:
+        return False
+    return any(name == item or name in item or item in name for item in bucket if item)
+
+
+def _weight_for(competency: str, must: set[str], nice: set[str]) -> float:
+    if _matches_any(competency, must):
+        return 3.0
+    if _matches_any(competency, nice):
+        return 1.5
+    return 1.0
+
+
 def _jd_weight_sets(briefing: dict | None) -> tuple[set[str], set[str]]:
     must: set[str] = set()
     nice: set[str] = set()
@@ -344,8 +386,7 @@ def aggregate_score(
 
     must, nice = _jd_weight_sets(briefing)
     weights = {
-        competency: 3.0 if competency in must else 1.5 if competency in nice else 1.0
-        for competency in per_competency
+        competency: _weight_for(competency, must, nice) for competency in per_competency
     }
     total_weight = sum(weights.values())
     score = round(
@@ -353,7 +394,11 @@ def aggregate_score(
     )
     notes: list[str] = []
 
-    failed_must = [c for c in per_competency if c in must and per_competency[c] < 55]
+    failed_must = [
+        competency
+        for competency in per_competency
+        if _matches_any(competency, must) and per_competency[competency] < 55
+    ]
     if failed_must:
         score = min(score, 64)
         notes.append("核心能力未达标：" + "、".join(failed_must))
@@ -391,32 +436,34 @@ def dimension_averages(turns: list[InterviewTurn]) -> dict[str, float]:
     return {key: round(value / count, 1) for key, value in total.items()}
 
 
-def build_evaluation(db: Session, session: InterviewSession) -> InterviewEvaluationOut:
+def build_evaluation(
+    db: Session,
+    session: InterviewSession,
+    *,
+    turns: list[InterviewTurn] | None = None,
+) -> InterviewEvaluationOut:
     """总分由能力项加权得出（可复算），文案由模型写（失败降级）。"""
-    turns = turns_of(db, session.id)
-    answered = [turn for turn in turns if turn.answer]
+    rows = turns if turns is not None else turns_of(db, session.id)
+    answered = [turn for turn in rows if turn.answer]
 
     score, decision, notes, _per_competency = aggregate_score(
-        turns=turns, briefing=session.briefing
+        turns=rows, briefing=session.briefing
     )
     dims = dimension_averages(answered)
-    unanswered = len([turn for turn in turns if not turn.answer])
+    unanswered = len([turn for turn in rows if not turn.answer])
 
     covered = covered_competencies(session)
     hits = 0
     total_points = 0
-    hedged = 0
     for turn in answered:
         total_points += len(turn.expected_points or [])
         if isinstance(turn.judgement, dict):
             hits += len(turn.judgement.get("hit_points") or [])
-            if turn.judgement.get("hedging"):
-                hedged += 1
 
     try:
         narrative = write_evaluation(
             position=session.position,
-            turns=turns,
+            turns=rows,
             score=score,
             covered=covered,
             dimensions=dims,
@@ -425,7 +472,7 @@ def build_evaluation(db: Session, session: InterviewSession) -> InterviewEvaluat
         data = narrative.model_dump()
     except Exception as exc:  # noqa: BLE001  评估文案失败不能把用户卡在面试里
         logger.warning("评估文案生成失败，改用规则摘要：%s", exc)
-        data = _heuristic_narrative(turns, score)
+        data = _heuristic_narrative(rows, score)
 
     improvements = list(data.get("improvements") or [])
     for note in notes:
@@ -458,8 +505,6 @@ def build_evaluation(db: Session, session: InterviewSession) -> InterviewEvaluat
         },
         {"label": "追问", "value": str(session.asked_followups), "suffix": "次"},
     ]
-    if hedged:
-        stats.append({"label": "模糊表述", "value": str(hedged), "suffix": "轮"})
     if unanswered:
         stats.append({"label": "未作答", "value": str(unanswered), "suffix": "题"})
 
@@ -479,10 +524,22 @@ def close_session(db: Session, session: InterviewSession, *, reason: str) -> Non
     """生成评估并置为 finished；幂等（已有 evaluation 直接返回）。"""
     if session.evaluation:
         return
-    evaluation = build_evaluation(db, session)
+    turns = turns_of(db, session.id)
+    evaluation = build_evaluation(db, session, turns=turns)
     session.status = "finished"
     session.finished_at = datetime.now()
     session.overall_score = evaluation.score
     session.summary = evaluation.description
     session.evaluation = evaluation.model_dump()
+
+    # 成长闭环：把这场暴露的短板沉淀成薄弱点。与评估同事务，
+    # 但失败只记日志——不能因为沉淀失败让用户拿不到评估。
+    try:
+        from app.services.growth import apply_interview_reviews, sync_from_interview
+
+        sync_from_interview(db, session, turns)
+        apply_interview_reviews(db, session, turns)
+    except Exception:  # 薄弱点沉淀不能阻塞收尾
+        logger.exception("薄弱点沉淀失败，已跳过（评估仍然有效）")
+
     logger.info("session %s 结束（%s），得分 %s", session.id, reason, evaluation.score)

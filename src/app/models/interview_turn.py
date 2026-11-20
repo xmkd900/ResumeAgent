@@ -73,6 +73,10 @@ class InterviewTurn(Base):
     claim_id: Mapped[int | None] = mapped_column(
         Integer, comment="简历溯源：对应 resume_claim.id，简历题有值"
     )
+    review_weak_point_id: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="本轮是复查哪条缺口（面试闭环回写用；不加外键，避免与 weak_point.source_turn_id 形成循环依赖）",
+    )
 
     answer: Mapped[str | None] = mapped_column(Text, comment="候选人回答；为空表示正在等待作答")
     judgement: Mapped[dict | None] = mapped_column(

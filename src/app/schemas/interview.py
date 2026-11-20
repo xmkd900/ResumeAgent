@@ -101,17 +101,23 @@ class JudgementOut(BaseModel):
     followup_hint: str = ""
     feedback: str = ""
 
-    # 维度得分（分点，不是 0-100）：覆盖 25 / 具体 25 / 推理 25 / 自证 15 / 结构 10
+    # 部分覆盖：说到了方向但缺关键限定，既不算命中也不该算"没答"
+    partial_points: list[str] = Field(default_factory=list)
+    # 逐条判定明细：[{id, point, status, quote, verified}]，用于复盘与调参
+    point_results: list[dict] = Field(default_factory=list)
+
+    # 维度得分（分点，不是 0-100）：覆盖 25 / 具体 25 / 推理 25 / 依据 15 / 结构 10
     dimensions: dict[str, int] = Field(default_factory=dict)
     evidence: list[JudgeEvidence] = Field(default_factory=list)
     # recall 复述 / understood 讲得清原理 / applied 有动手细节 / reflective 能反思局限
     depth: str = ""
     probe_needed: bool = False
     probe_target: str = ""
+    # 仅作信息留存，不参与打分（口头语不等于表达不清）
     hedging: list[str] = Field(default_factory=list)
     contradiction: str = "none"
     declared_unknown: bool = False
-    # 分数被哪条硬规则压下来（便于调参与排障），如 "hedging>=3"
+    # 分数被哪条硬规则压下来（便于调参与排障），如 "所有要点缺失"
     capped_by: str = ""
 
 
@@ -139,6 +145,7 @@ class InterviewTurnOut(BaseModel):
     verdict: Verdict | None = None
     score: int | None = None
     judgement: JudgementOut | None = None
+    review_weak_point_id: int | None = None
     answered_at: datetime | None = None
     created_at: datetime
 

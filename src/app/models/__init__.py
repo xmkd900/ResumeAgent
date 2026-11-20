@@ -6,6 +6,8 @@ from app.models.interview_turn import InterviewTurn
 from app.models.resume import Resume
 from app.models.resume_claim import ResumeClaim
 from app.models.user import User
+from app.models.weak_point import WeakPoint
+from app.models.weak_point_practice import WeakPointPractice
 
 __all__ = [
     "Base",
@@ -16,4 +18,6 @@ __all__ = [
     "Resume",
     "ResumeClaim",
     "User",
+    "WeakPoint",
+    "WeakPointPractice",
 ]

@@ -107,6 +107,7 @@ class DirectorDecision(BaseModel):
     action: str = "ask"
     followup_kind: str = "deepen"
     probe_quote: str | None = None
+    review_weak_point_id: int | None = None
     reason: str = ""
     competency: str = ""
     anchor: str = "general"
@@ -343,9 +344,13 @@ DIRECTOR_SYSTEM_PROMPT = """你是一场技术模拟面试的面试官，正在�
 - 判卷结果里除了分数，还有三个关键信号：
   · depth：recall 只会复述 / understood 讲得清原理 / applied 有动手细节 / reflective 能反思局限；
   · probe_needed：这段回答里最经不起追问的那一点（probe_target）；
-  · hedging：他用了多少"好像是 / 记不清 / 大概"这类模糊限定。
+  · partial_points：说到了方向但缺关键限定的要点——这是"部分覆盖"，不是"没答"，
+    追问时补的是缺的那半句，不要把整条当成空白。
 - **只要上一轮 probe_needed=true，这一轮就必须追问验真，不许换话题**——
   这是区分"真做过"和"背过"的唯一办法。只有连续追问到 3 层仍无进展，才允许换方向。
+- 【到期复查】里列出的缺口是成长闭环安排的复查：优先用**变体题**考（换场景/加约束，
+  不要重问原题），`expected_points` 的第一条必须原样复制该缺口，
+  并填写 `review_weak_point_id`。复查轮不占用额外预算，但一次面试最多安排 1-2 个。
 - 题库能力分布告诉你"还有哪些方向可以考"。需要一道结构化题目（八股/场景）时用 search_bank，否则直接按简历/JD 提问。
 
 ## 追问三型（followup_kind 必须填）
@@ -480,26 +485,25 @@ def _render_turns(turns: list[InterviewTurn]) -> str:
             detail = ""
             gap = ""
             probe = ""
-            hedge = ""
             if isinstance(turn.judgement, dict):
                 dims = turn.judgement.get("dimensions") or {}
                 if dims:
                     detail = (
                         f"（具体{dims.get('specificity', 0)}/25"
                         f" 推理{dims.get('reasoning', 0)}/25"
-                        f" 自证{dims.get('authenticity', 0)}/15）"
+                        f" 依据{dims.get('authenticity', 0)}/15）"
                     )
                 misses = turn.judgement.get("missing_points") or []
                 if misses:
                     gap = "；缺口: " + "、".join(str(item) for item in misses[:3])
-                words = turn.judgement.get("hedging") or []
-                if words:
-                    hedge = "；模糊词: " + "、".join(str(item) for item in words[:4])
+                partials = turn.judgement.get("partial_points") or []
+                if partials:
+                    gap += "；部分覆盖: " + "、".join(str(item) for item in partials[:3])
                 if turn.judgement.get("probe_needed"):
                     probe = str(turn.judgement.get("probe_target") or "").strip()
             head += (
                 f"\n   答: {_squash(turn.answer, 200)}"
-                f"\n   判卷: {judged}{detail}{gap}{hedge}"
+                f"\n   判卷: {judged}{detail}{gap}"
             )
             if probe:
                 head += f"\n   待验真: {probe}"
@@ -521,6 +525,18 @@ def _covered_competencies(turns: list[InterviewTurn]) -> set[str]:
         for turn in turns
         if turn.competency and turn.action in {"open", "ask"}
     }
+
+
+def _render_due(briefing: dict) -> str:
+    """到期复查项：只有补齐了缺口（fixed）且到期才会出现。"""
+    rows = (briefing or {}).get("due_weak_points") or []
+    if not rows:
+        return "（今天没有到期复查项）"
+    return "\n".join(
+        f"- #{row.get('weak_point_id')} [{row.get('topic')}] "
+        f"缺口：{row.get('gap_point') or '（未记录）'}（第 {row.get('stage') or 0} 阶段）"
+        for row in rows
+    )
 
 
 def _asked_claim_ids(turns: list[InterviewTurn]) -> set[int]:
@@ -596,6 +612,7 @@ def decide(
         f"【最近一次回答】"
         f"{_squash(last_answered.answer, 300) if last_answered and last_answered.answer else '（无）'}\n"
         f"【待验真】{pending_probe or '无，这段回答没有明显站不住的地方'}\n"
+        f"【到期复查】\n{_render_due(briefing)}\n"
     )
     if note:
         state += f"\n【系统提示】{note}\n"
@@ -732,6 +749,11 @@ def _sanitize_decision(
     kind = (decision.followup_kind or "").strip().lower()
     updates["followup_kind"] = kind if kind in {"verify", "deepen", "clarify"} else "deepen"
     updates["probe_quote"] = _squash(decision.probe_quote or "", 120) or None
+    review_id = decision.review_weak_point_id
+    try:
+        updates["review_weak_point_id"] = int(review_id) if review_id is not None else None
+    except (TypeError, ValueError):
+        updates["review_weak_point_id"] = None
     return decision.model_copy(update=updates)
 
 
@@ -859,9 +881,9 @@ def write_evaluation(
             misses = turn.judgement.get("missing_points") or []
             if misses:
                 gaps = "；缺口: " + "、".join(str(item) for item in misses[:3])
-            words = turn.judgement.get("hedging") or []
-            if words:
-                signals += "；模糊表述: " + "、".join(str(item) for item in words[:3])
+            partials = turn.judgement.get("partial_points") or []
+            if partials:
+                signals += "；部分覆盖: " + "、".join(str(item) for item in partials[:3])
             if turn.judgement.get("declared_unknown"):
                 signals += "；明确表示不会"
             if turn.judgement.get("contradiction") in {"minor", "major"}:

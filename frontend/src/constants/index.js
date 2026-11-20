@@ -31,8 +31,15 @@ export const DIMENSION_META = {
   coverage: { label: '要点覆盖', max: 25 },
   specificity: { label: '具体程度', max: 25 },
   reasoning: { label: '推理深度', max: 25 },
-  authenticity: { label: '经历自证', max: 15 },
+  authenticity: { label: '依据充分', max: 15 },
   clarity: { label: '表达结构', max: 10 },
+}
+
+/** 薄弱点状态：待修复 → 待复查 → 已掌握 */
+export const WEAK_STATUS_META = {
+  open: { label: '待修复', tone: 'warn', hint: '补上这一句就进入复查' },
+  fixed: { label: '待复查', tone: 'accent', hint: '到期用变体题确认没忘' },
+  resolved: { label: '已掌握', tone: 'success', hint: '走完复习间隔，已归档' },
 }
 
 /** 整场结论：来自能力项加权与核心项门槛，不由模型决定 */

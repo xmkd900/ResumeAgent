@@ -9,6 +9,7 @@
 
 import logging
 import re
+from difflib import SequenceMatcher
 from typing import Any
 
 from pydantic import ValidationError
@@ -18,6 +19,7 @@ from app.llm.client import LLMError, chat
 from app.llm.json import extract_json_object as _extract_json_object
 from app.schemas.resume import DiagnosisResult, DimensionScore, IssueOut
 from app.services.parser import split_sections
+from app.services.text_match import locate_quote
 
 logger = logging.getLogger(__name__)
 
@@ -86,13 +88,24 @@ def _build_messages(resume_text: str, jd_text: str | None) -> list[dict[str, str
     ]
 
 
+def _nearest_dimension(name: str, raw_scores: dict[str, Any]) -> Any | None:
+    """按名称相似度找最接近的维度（容忍"结构表达/表达结构"这类换序写法）。"""
+    best: Any | None = None
+    best_ratio = 0.0
+    for key, value in raw_scores.items():
+        ratio = SequenceMatcher(None, name, key).ratio()
+        if ratio > best_ratio:
+            best, best_ratio = value, ratio
+    return best if best_ratio >= 0.5 else None
+
+
 def _normalize_result(result: DiagnosisResult) -> DiagnosisResult:
     """补齐缺失维度、裁剪 issues，保证前端渲染契约稳定。"""
     raw_scores = {item.name.strip(): item.score for item in result.dimension_scores}
     matched_names = [
         name
         for name in DIMENSION_NAMES
-        if name in raw_scores or any(name[:2] in key for key in raw_scores)
+        if _nearest_dimension(name, raw_scores) is not None
     ]
     if len(matched_names) < 3:
         raise ValueError("dimension_scores 缺少规定维度")
@@ -101,10 +114,11 @@ def _normalize_result(result: DiagnosisResult) -> DiagnosisResult:
     for name in DIMENSION_NAMES:
         score = raw_scores.get(name)
         if score is None:
-            # 容忍 “岗位匹配度” 这类近义写法
-            matched = next((v for k, v in raw_scores.items() if name[:2] in k), None)
-            score = matched if matched is not None else 60
-        dimension_scores.append(DimensionScore(name=name, score=_clamp(score)))
+            # 容忍 “岗位匹配度”“结构表达” 这类近义/换序写法
+            score = _nearest_dimension(name, raw_scores)
+        dimension_scores.append(
+            DimensionScore(name=name, score=_clamp(score if score is not None else 60))
+        )
 
     issues = []
     for issue in result.issues[:6]:
@@ -129,15 +143,28 @@ def _normalize_result(result: DiagnosisResult) -> DiagnosisResult:
 
 
 def _sanitize_quotes(result: DiagnosisResult, resume_text: str) -> DiagnosisResult:
-    """任何不在原文中的 quote 都视为编造，直接清空，避免伪造引用。"""
-    compact_resume = re.sub(r"\s+", "", resume_text or "")
+    """把引用对齐到原文。
+
+    不再用"去空格后严格包含"判断真伪——PDF 解析出的空格、全半角、标点差异
+    会把真实引用判成编造（这是简历侧此前的假阴性来源）。改为模糊定位：
+    - 定位成功（≥0.82）：回填原文里真实存在的片段；
+    - 定位失败：清空引用并标记 quote_verified=False，问题描述与改写仍然保留。
+    """
     issues = []
     for issue in result.issues:
         quote = (issue.quote or "").strip()
-        if quote and re.sub(r"\s+", "", quote) not in compact_resume:
-            logger.info("discard quote not found in resume")
-            quote = ""
-        issues.append(issue.model_copy(update={"quote": quote[:300]}))
+        verified = True
+        if quote:
+            match = locate_quote(quote, resume_text)
+            if match.score >= 0.82:
+                quote = match.text.strip()
+            else:
+                logger.info("quote not located in resume (score=%.2f)", match.score)
+                quote = ""
+                verified = False
+        issues.append(
+            issue.model_copy(update={"quote": quote[:300], "quote_verified": verified})
+        )
     return result.model_copy(update={"issues": issues})
 
 

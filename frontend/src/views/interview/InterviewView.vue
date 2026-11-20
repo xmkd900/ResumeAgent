@@ -436,6 +436,12 @@ function dimTone(percent) {
                   </ul>
                 </div>
               </div>
+              <div v-if="msg.judgement.partials.length" class="feedback__partials">
+                <span class="feedback__partials-label">部分覆盖</span>
+                <span v-for="item in msg.judgement.partials" :key="item" class="feedback__partial">
+                  {{ item }}
+                </span>
+              </div>
               <div v-if="msg.judgement.dimensions.length" class="feedback__dims">
                 <div v-for="dim in msg.judgement.dimensions" :key="dim.key" class="dim">
                   <span class="dim__label">{{ dim.label }}</span>
@@ -445,9 +451,6 @@ function dimTone(percent) {
                   <span class="dim__value num">{{ dim.value }}/{{ dim.max }}</span>
                 </div>
               </div>
-              <p v-if="msg.judgement.hedging.length" class="feedback__hedge">
-                这段回答里有 {{ msg.judgement.hedging.length }} 处模糊表述：{{ msg.judgement.hedging.join('、') }}
-              </p>
               <p v-if="msg.judgement.feedback" class="feedback__note">{{ msg.judgement.feedback }}</p>
             </div>
           </template>
@@ -1084,9 +1087,25 @@ function dimTone(percent) {
   text-align: right;
 }
 
-.feedback__hedge {
-  margin-top: 8px;
-  font-size: 11px;
+.feedback__partials {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.feedback__partials-label {
+  font-size: 10.5px;
+  font-weight: 650;
+  color: #96600f;
+}
+
+.feedback__partial {
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--warn-soft);
+  font-size: 10.5px;
   color: #96600f;
 }
 

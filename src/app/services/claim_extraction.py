@@ -7,7 +7,6 @@
 """
 
 import logging
-import re
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -18,6 +17,7 @@ from app.llm.client import LLMError, chat
 from app.llm.json import extract_json_object
 from app.models import ResumeClaim
 from app.schemas.interview import ClaimDraft, ClaimExtraction
+from app.services.text_match import contains_phrase, locate_quote
 
 logger = logging.getLogger(__name__)
 
@@ -59,33 +59,39 @@ class ClaimExtractionError(Exception):
         self.status_code = status_code
 
 
-def _compact(text: str) -> str:
-    return re.sub(r"\s+", "", text or "").lower()
-
-
 def _validate_claims(claims: list[ClaimDraft], resume_text: str) -> list[ClaimDraft]:
-    compact_resume = _compact(resume_text)
+    """校验证据是否落在简历原文里。
+
+    用模糊定位代替"去空格严格包含"：模型抄引用时常改标点、加空格、全半角混用，
+    严格匹配会把真实经历丢掉。定位成功就回填原文片段，保证落库的永远是原文。
+    """
     result: list[ClaimDraft] = []
     seen: set[tuple[str, str]] = set()
 
     for claim in claims:
         quote = claim.evidence_quote.strip()
         title = claim.title.strip()
-        if not title or len(quote) < 6 or _compact(quote) not in compact_resume:
-            logger.info("discard claim without verifiable evidence: %s", title or "<empty>")
+        if not title or len(quote) < 6:
             continue
+
+        match = locate_quote(quote, resume_text)
+        if match.score < 0.82:
+            logger.info(
+                "discard claim without verifiable evidence: %s (score=%.2f)",
+                title or "<empty>",
+                match.score,
+            )
+            continue
+        quote = match.text.strip()
 
         key = (claim.claim_type, title.casefold())
         if key in seen:
             continue
         seen.add(key)
 
-        # 只保留确实出现在引文里的技术词，防止模型补充简历没有的技术
-        tags = [
-            tag.strip()
-            for tag in claim.tech_tags
-            if tag.strip() and tag.strip().casefold() in quote.casefold()
-        ]
+        # 只保留确实出现在引文里的技术词，防止模型补充简历没有的技术。
+        # 用归一化包含，容忍 "Spring Cloud" / "SpringCloud" 这类写法差异。
+        tags = [tag.strip() for tag in claim.tech_tags if tag.strip() and contains_phrase(quote, tag)]
         result.append(
             claim.model_copy(
                 update={

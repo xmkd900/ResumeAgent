@@ -1,207 +1,142 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, Check, Reading } from '@element-plus/icons-vue'
+import { ArrowRight, Check, Clock, EditPen } from '@element-plus/icons-vue'
 
 import PageHeader from '@/components/PageHeader.vue'
 import SectionCard from '@/components/SectionCard.vue'
-import { SEVERITY_META, WEAK_SEVERITY_WEIGHT, WEAK_SOURCE_LABELS } from '@/constants'
+import { growthApi } from '@/api/growth'
+import { SEVERITY_META, VERDICT_META, WEAK_STATUS_META } from '@/constants'
 
-/* ---------------- 演示数据 ---------------- */
+const router = useRouter()
 
-const weakPoints = ref([
-  {
-    id: 1,
-    topic: 'MySQL 联合索引与最左前缀',
-    severity: 'high',
-    source: 'interview',
-    relapse: 3,
-    mastery: 35,
-    resolved: false,
-    tags: ['MySQL', '索引'],
-  },
-  {
-    id: 2,
-    topic: '缓存穿透 / 击穿 / 雪崩',
-    severity: 'high',
-    source: 'interview',
-    relapse: 2,
-    mastery: 42,
-    resolved: false,
-    tags: ['Redis', '缓存'],
-  },
-  {
-    id: 3,
-    topic: '分布式事务与最终一致性',
-    severity: 'medium',
-    source: 'interview',
-    relapse: 1,
-    mastery: 58,
-    resolved: false,
-    tags: ['事务', '一致性'],
-  },
-  {
-    id: 4,
-    topic: 'HTTP 与 TCP 的连接复用',
-    severity: 'medium',
-    source: 'self_test',
-    relapse: 1,
-    mastery: 61,
-    resolved: false,
-    tags: ['网络'],
-  },
-  {
-    id: 5,
-    topic: 'JVM 垃圾回收与调优',
-    severity: 'low',
-    source: 'self_test',
-    relapse: 0,
-    mastery: 72,
-    resolved: false,
-    tags: ['JVM'],
-  },
-])
-
-const EXERCISES = {
-  1: [
-    { title: '联合索引的列顺序怎么定？', type: '概念讲解', minutes: 8, tags: ['索引', '最左前缀'] },
-    { title: '回表与覆盖索引：把过滤压进索引层', type: '概念讲解', minutes: 10, tags: ['覆盖索引'] },
-    { title: '场景题：为订单列表设计一个索引', type: '场景练习', minutes: 12, tags: ['索引设计'] },
-  ],
-  2: [
-    { title: '三种缓存异常的区别与应对', type: '概念讲解', minutes: 9, tags: ['缓存', 'Redis'] },
-    { title: '布隆过滤器与空值缓存的取舍', type: '概念讲解', minutes: 7, tags: ['布隆过滤器'] },
-    { title: '场景题：热点 key 失效后的 30 秒', type: '场景练习', minutes: 12, tags: ['热点 key'] },
-  ],
-  3: [
-    { title: '2PC、TCC 与本地消息表', type: '概念讲解', minutes: 11, tags: ['分布式事务'] },
-    { title: '场景题：订单与库存如何最终一致', type: '场景练习', minutes: 14, tags: ['一致性'] },
-  ],
-  4: [
-    { title: 'Keep-Alive 到底省掉了什么', type: '概念讲解', minutes: 6, tags: ['HTTP', 'TCP'] },
-    { title: 'HTTP/2 多路复用的边界', type: '概念讲解', minutes: 8, tags: ['HTTP/2'] },
-  ],
-  5: [
-    { title: 'G1 与 CMS 的取舍', type: '概念讲解', minutes: 10, tags: ['JVM', 'GC'] },
-    { title: '一次 Full GC 的排查路径', type: '场景练习', minutes: 12, tags: ['调优'] },
-  ],
-}
-
-const PRACTICE_CONTENT = {
-  1: {
-    intro: [
-      '联合索引在 B+ 树里按「列顺序」逐级排序，因此查询条件必须从最左列开始连续匹配，才能用上索引的有序性<sup class="cite">[1]</sup>。',
-      '更关键的是回表成本：二级索引叶子节点只存主键，索引列之外的字段必须回到聚簇索引再查一次。把过滤条件全部放进索引，才能把回表次数压到最低<sup class="cite">[2]</sup>。',
-    ],
-    question: '不看上文，用三句话讲清：为什么 (user_id, status, created_at) 能优化订单列表查询，而三个独立索引不行？',
-    sources: [
-      { idx: 1, title: 'MySQL 索引原理 · 联合索引与最左前缀', meta: '知识库文档 · KB #1024' },
-      { idx: 2, title: '内部题库 · 回表与覆盖索引', meta: '知识库文档 · KB #1187' },
-    ],
-  },
-  2: {
-    intro: [
-      '穿透是查不存在的数据，请求绕过缓存直达数据库；击穿是单个热点 key 失效瞬间的并发冲击；雪崩是大量 key 同时失效<sup class="cite">[1]</sup>。',
-      '三者的应对并不通用：穿透适合空值缓存或布隆过滤器，击穿适合互斥锁或逻辑过期，雪崩靠过期时间打散与多级缓存兜底<sup class="cite">[2]</sup>。',
-    ],
-    question: '用三句话说明：击穿和雪崩的差别，以及各自的第一道防线。',
-    sources: [
-      { idx: 1, title: 'Redis 缓存设计 · 三类异常', meta: '知识库文档 · KB #1102' },
-      { idx: 2, title: '内部题库 · 热点 key 与互斥重建', meta: '知识库文档 · KB #1156' },
-    ],
-  },
-}
-
-const DEFAULT_CONTENT = {
-  intro: [
-    '这个知识点在面试里通常从「为什么需要它」和「边界情况怎么处理」两个方向追问，背结论很难通过，讲清取舍才行。',
-    '先用自己的项目场景复述一遍，再对照来源核对细节，掌握度会随复述质量更新。',
-  ],
-  question: '不看上文，用三句话讲清这个知识点的核心取舍。',
-  sources: [{ idx: 1, title: '知识库 · 相关知识点整理', meta: '知识库文档' }],
-}
-
-/* ---------------- 状态 ---------------- */
-
-const selectedId = ref(1)
-const drawerOpen = ref(false)
-const practiceFor = ref(null)
-const practiceAnswer = ref('')
-const judgement = ref(null)
-const judging = ref(false)
-
-const activePoints = computed(() => weakPoints.value.filter((item) => !item.resolved))
-
-const sortedPoints = computed(() =>
-  [...weakPoints.value].sort((a, b) => {
-    if (a.resolved !== b.resolved) return a.resolved ? 1 : -1
-    const weight = WEAK_SEVERITY_WEIGHT[b.severity] - WEAK_SEVERITY_WEIGHT[a.severity]
-    if (weight !== 0) return weight
-    return b.relapse - a.relapse
-  }),
-)
-
-const stats = computed(() => {
-  const active = activePoints.value
-  const avg = active.length
-    ? Math.round(active.reduce((sum, item) => sum + item.mastery, 0) / active.length)
-    : 0
-  return { active: active.length, avg, weekly: 12 }
+const queue = ref({
+  stats: { open: 0, due: 0, resolved: 0 },
+  fix: [],
+  review: [],
+  next_review_at: null,
 })
+const loading = ref(true)
+const loadError = ref('')
+const resolvedItems = ref([])
+const resolvedOpen = ref(false)
 
-const selectedPoint = computed(
-  () => weakPoints.value.find((item) => item.id === selectedId.value) || activePoints.value[0],
-)
+const selected = ref(null)
+const card = ref(null)
+const cardLoading = ref(false)
 
-const recommendations = computed(() => EXERCISES[selectedPoint.value?.id] || [])
+const drawerOpen = ref(false)
+const mode = ref('fix')
+const answer = ref('')
+const submitting = ref(false)
+const result = ref(null)
 
-const content = computed(() => PRACTICE_CONTENT[practiceFor.value?.id] || DEFAULT_CONTENT)
+const queueItems = computed(() => [...queue.value.fix, ...queue.value.review])
 
-function selectPoint(point) {
-  selectedId.value = point.id
+async function loadAll(showLoading = true) {
+  if (showLoading) loading.value = true
+  loadError.value = ''
+  try {
+    const [queueData, allData] = await Promise.all([
+      growthApi.getQueue(),
+      growthApi.listWeakPoints(),
+    ])
+    queue.value = queueData
+    resolvedItems.value = (allData.items || []).filter(
+      (item) => item.resolved || item.status === 'resolved',
+    )
+
+    const keep =
+      selected.value && queueItems.value.find((item) => item.id === selected.value.id)
+    selected.value = keep || queueItems.value[0] || null
+    if (selected.value) await loadCard(selected.value.id)
+    else card.value = null
+  } catch (err) {
+    loadError.value = err?.message || '今日队列加载失败，请稍后重试'
+  } finally {
+    loading.value = false
+  }
 }
 
-function openPractice(point) {
-  practiceFor.value = point
-  selectedId.value = point.id
-  practiceAnswer.value = ''
-  judgement.value = null
+async function loadCard(id) {
+  cardLoading.value = true
+  try {
+    card.value = await growthApi.getGapCard(id)
+  } catch {
+    card.value = null
+  } finally {
+    cardLoading.value = false
+  }
+}
+
+function selectItem(item) {
+  selected.value = item
+  loadCard(item.id)
+}
+
+function openAction(item, kind) {
+  if (!item) return
+  selected.value = item
+  mode.value = kind
+  answer.value = ''
+  result.value = null
   drawerOpen.value = true
+  if (!card.value || card.value.weak_point.id !== item.id) loadCard(item.id)
 }
 
-function judgeAnswer() {
-  if (!practiceAnswer.value.trim()) {
-    ElMessage.warning('先写下你的复述')
+async function submit() {
+  const point = selected.value
+  if (!point) return
+  if (!answer.value.trim()) {
+    ElMessage.warning('先写下你的回答')
     return
   }
-  judging.value = true
-  setTimeout(() => {
-    judging.value = false
-    judgement.value = {
-      verdict: 'partial',
-      hits: ['用到了「有序性」这个关键前提', '提到了回表的成本来源'],
-      misses: ['没有给出覆盖索引这个补救手段', '缺少一个具体查询例子'],
+  submitting.value = true
+  try {
+    const data =
+      mode.value === 'fix'
+        ? await growthApi.submitFix(point.id, answer.value)
+        : await growthApi.submitReview(point.id, {
+            answer: answer.value,
+            questionId: card.value?.review_question?.question_id ?? null,
+          })
+    result.value = { mode: mode.value, ...data }
+    ElMessage.success(data.message || (data.gap_covered ? '这条补上了' : '还没补到点上'))
+    await loadAll(false)
+    // 修复后这条会离开"待修复"队列，但抽屉要停在它上面展示结果
+    if (data.weak_point) {
+      selected.value = data.weak_point
+      await loadCard(data.weak_point.id)
     }
-  }, 900)
-}
-
-function markMastered() {
-  const point = practiceFor.value
-  if (!point) return
-  const target = weakPoints.value.find((item) => item.id === point.id)
-  if (target) {
-    target.mastery = 100
-    target.resolved = true
+  } catch (err) {
+    ElMessage.error(err?.message || '提交失败，请稍后重试')
+  } finally {
+    submitting.value = false
   }
-  ElMessage.success('已标记为掌握，掌握度更新为 100%')
-  drawerOpen.value = false
 }
 
-function meterTone(mastery) {
-  if (mastery >= 70) return 'meter__fill--accent'
-  if (mastery >= 50) return 'meter__fill--warn'
-  return 'meter__fill--danger'
+function statusMeta(item) {
+  return WEAK_STATUS_META[item?.status] || WEAK_STATUS_META.open
 }
+
+function verdictLabel(verdict) {
+  return VERDICT_META[verdict]?.label || verdict
+}
+
+function shortText(text, limit = 90) {
+  const value = (text || '').trim()
+  return value.length > limit ? `${value.slice(0, limit)}…` : value
+}
+
+function formatDate(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return `${date.getMonth() + 1} 月 ${date.getDate()} 日`
+}
+
+onMounted(() => loadAll())
 </script>
 
 <template>
@@ -209,242 +144,347 @@ function meterTone(mastery) {
     <PageHeader
       eyebrow="Growth Loop"
       title="成长闭环"
-      subtitle="薄弱点来自模拟面试与自测，按严重度和复发次数排序。练习判卷只更新掌握度，不新增薄弱点。"
+      subtitle="面试暴露的缺口，先补这一句，再按间隔用变体题复查；复查通过才算真正掌握。"
     >
       <template #actions>
-        <el-button type="primary" plain :icon="Reading" @click="openPractice(selectedPoint)">
-          继续上次练习
-        </el-button>
+        <span v-if="!loading && !loadError" class="pill pill--soft">
+          今日 {{ queue.fix.length + queue.review.length }} 项
+        </span>
       </template>
     </PageHeader>
 
     <div class="stats">
       <div class="stat">
-        <span class="stat__label">待攻克薄弱点</span>
-        <span class="stat__value num">{{ stats.active }}<small>个</small></span>
-        <span class="stat__hint">高优先级 {{ activePoints.filter((p) => p.severity === 'high').length }} 个</span>
+        <span class="stat__label">待修复</span>
+        <span class="stat__value num">{{ queue.stats.open }}<small>条</small></span>
+        <span class="stat__hint">只补缺的那一句，30 秒</span>
       </div>
       <div class="stat">
-        <span class="stat__label">平均掌握度</span>
-        <span class="stat__value num">{{ stats.avg }}<small>%</small></span>
-        <span class="stat__hint">练习后自动更新</span>
+        <span class="stat__label">今日复查</span>
+        <span class="stat__value num">{{ queue.stats.due }}<small>条</small></span>
+        <span class="stat__hint">
+          {{
+            queue.stats.due
+              ? '到期了，用变体题确认没忘'
+              : `下次复查 ${formatDate(queue.next_review_at)}`
+          }}
+        </span>
       </div>
       <div class="stat">
-        <span class="stat__label">近 7 天练习</span>
-        <span class="stat__value num">{{ stats.weekly }}<small>次</small></span>
-        <span class="stat__hint">复述判卷 8 次 · 概念阅读 4 次</span>
+        <span class="stat__label">已掌握</span>
+        <span class="stat__value num">{{ queue.stats.resolved }}<small>条</small></span>
+        <span class="stat__hint">按记忆曲线拉长，最长 30 天</span>
       </div>
     </div>
 
     <div class="grid">
-      <SectionCard class="span-8" title="薄弱点" subtitle="按严重度 × 复发次数排序，越靠前越该先补">
-        <template #extra>
-          <span class="pill pill--outline">{{ sortedPoints.length }} 条</span>
+      <SectionCard class="span-7" title="今日队列" subtitle="先修复，再复查；没有到期项就不打扰你">
+        <p v-if="loading" class="state">正在整理今天的队列…</p>
+        <p v-else-if="loadError" class="state state--error">{{ loadError }}</p>
+
+        <div v-else-if="!queueItems.length" class="empty">
+          <p class="empty__title">今天没有待办</p>
+          <p class="empty__desc">
+            完成一场模拟面试后，得分低于 60 的题目会变成「缺口卡」出现在这里；复查到期时也会回到队列。
+          </p>
+          <el-button type="primary" plain @click="router.push('/interview')">
+            去做一场模拟面试
+          </el-button>
+        </div>
+
+        <template v-else>
+          <section v-if="queue.fix.length" class="group">
+            <header class="group__head">
+              <span class="dot dot--warn" />
+              <h3>待修复</h3>
+              <span class="group__count">{{ queue.fix.length }}</span>
+              <span class="group__hint">补上缺的那一句</span>
+            </header>
+            <ul class="rows">
+              <li
+                v-for="item in queue.fix"
+                :key="item.id"
+                class="row"
+                :class="{ 'is-active': selected?.id === item.id }"
+                @click="selectItem(item)"
+              >
+                <div class="row__body">
+                  <div class="row__top">
+                    <p class="row__topic">{{ item.topic }}</p>
+                    <span class="pill" :class="`pill--sev-${item.severity}`">
+                      {{ SEVERITY_META[item.severity]?.label }}
+                    </span>
+                  </div>
+                  <p class="row__gap">
+                    缺：{{ shortText(item.gap_point || item.last_evidence) }}
+                  </p>
+                  <p class="row__meta">
+                    复发 {{ item.relapse_count }} 次 · 来自{{
+                      item.source === 'interview' ? '面试' : '自测'
+                    }}
+                  </p>
+                </div>
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  @click.stop="openAction(item, 'fix')"
+                >
+                  补这一句
+                </el-button>
+              </li>
+            </ul>
+          </section>
+
+          <section v-if="queue.review.length" class="group">
+            <header class="group__head">
+              <span class="dot dot--accent" />
+              <h3>今日复查</h3>
+              <span class="group__count">{{ queue.review.length }}</span>
+              <span class="group__hint">变体题，不看原文</span>
+            </header>
+            <ul class="rows">
+              <li
+                v-for="item in queue.review"
+                :key="item.id"
+                class="row"
+                :class="{ 'is-active': selected?.id === item.id }"
+                @click="selectItem(item)"
+              >
+                <div class="row__body">
+                  <div class="row__top">
+                    <p class="row__topic">{{ item.topic }}</p>
+                    <span class="pill pill--accent">待复查</span>
+                  </div>
+                  <p class="row__gap">
+                    复查重点：{{ shortText(item.gap_point || item.last_evidence) }}
+                  </p>
+                  <p class="row__meta">
+                    第 {{ item.review_stage }} 阶段 · 已复查 {{ item.review_count }} 次
+                  </p>
+                </div>
+                <el-button size="small" plain @click.stop="openAction(item, 'review')">
+                  去复查
+                </el-button>
+              </li>
+            </ul>
+          </section>
         </template>
 
-        <ul class="weak-list">
-          <li
-            v-for="point in sortedPoints"
-            :key="point.id"
-            class="weak"
-            :class="{ 'is-active': selectedId === point.id, 'is-resolved': point.resolved }"
-            @click="selectPoint(point)"
-          >
-            <span class="weak__bar" :class="`weak__bar--${point.resolved ? 'done' : point.severity}`" />
-
-            <div class="weak__body">
-              <div class="weak__top">
-                <p class="weak__topic">{{ point.topic }}</p>
-                <span v-if="point.resolved" class="pill pill--accent">已掌握</span>
-                <span v-else class="pill" :class="`pill--sev-${point.severity}`">
-                  {{ SEVERITY_META[point.severity].label }}
-                </span>
-              </div>
-
-              <p class="weak__meta">
-                复发 <strong class="num">{{ point.relapse }}</strong> 次
-                <span class="weak__dot">·</span>
-                来自{{ WEAK_SOURCE_LABELS[point.source] }}
-                <span class="weak__dot">·</span>
-                {{ point.tags.join(' / ') }}
-              </p>
-
-              <div class="weak__meter">
-                <div class="meter">
-                  <div
-                    class="meter__fill"
-                    :class="point.resolved ? 'meter__fill--accent' : meterTone(point.mastery)"
-                    :style="{ width: `${point.mastery}%` }"
-                  />
-                </div>
-                <span class="weak__pct num">{{ point.mastery }}%</span>
-              </div>
-            </div>
-
-            <el-button size="small" plain class="weak__cta" @click.stop="openPractice(point)">
-              {{ point.resolved ? '复习' : '去练习' }}
-            </el-button>
-          </li>
-        </ul>
-
-        <p class="weak-note">
-          掌握度由练习表现持续更新；标记已掌握后移出待攻克列表，再次复发会重新打开。
-        </p>
+        <div v-if="resolvedItems.length" class="resolved">
+          <button type="button" class="resolved__toggle" @click="resolvedOpen = !resolvedOpen">
+            <el-icon><Check /></el-icon>
+            已掌握 {{ resolvedItems.length }} 条
+            <span>{{ resolvedOpen ? '收起' : '展开' }}</span>
+          </button>
+          <ul v-if="resolvedOpen" class="resolved__list">
+            <li v-for="item in resolvedItems" :key="item.id">
+              <span class="resolved__topic">{{ item.topic }}</span>
+              <span class="resolved__gap">
+                {{ shortText(item.gap_point || item.last_evidence, 48) }}
+              </span>
+            </li>
+          </ul>
+        </div>
       </SectionCard>
 
       <SectionCard
-        class="span-4"
-        title="推荐练习"
-        :subtitle="selectedPoint ? `针对「${selectedPoint.topic}」` : '选择左侧薄弱点查看'"
+        class="span-5"
+        title="缺口卡"
+        :subtitle="selected ? '原题、原话与缺的那一条' : '选择左侧一项查看'"
       >
-        <div v-if="selectedPoint" class="recommend">
-          <div class="recommend__head">
-            <span class="pill" :class="`pill--sev-${selectedPoint.severity}`">
-              {{ SEVERITY_META[selectedPoint.severity].label }}
-            </span>
-            <span class="recommend__mastery">
-              当前掌握度 <strong class="num">{{ selectedPoint.mastery }}%</strong>
+        <p v-if="!selected" class="state">左侧还没有待办；面试后会自动生成缺口卡。</p>
+        <p v-else-if="cardLoading" class="state">正在回放原题…</p>
+        <p v-else-if="!card" class="state state--error">缺口卡加载失败</p>
+
+        <div v-else class="gapcard">
+          <div class="gapcard__top">
+            <h3>{{ card.weak_point.topic }}</h3>
+            <span class="pill" :class="`pill--status-${statusMeta(card.weak_point).tone}`">
+              {{ statusMeta(card.weak_point).label }}
             </span>
           </div>
 
-          <ul class="exercise-list">
-            <li
-              v-for="(exercise, index) in recommendations"
-              :key="exercise.title"
-              class="exercise"
-              @click="openPractice(selectedPoint)"
+          <div class="block">
+            <p class="block__label">原题</p>
+            <p class="block__text">{{ card.source.question || '（这条缺口没有关联原题）' }}</p>
+          </div>
+
+          <div v-if="card.source.quote || card.source.answer" class="block block--quote">
+            <p class="block__label">你当时的原话</p>
+            <p class="block__text">
+              {{ shortText(card.source.quote || card.source.answer, 160) }}
+            </p>
+          </div>
+
+          <div class="block block--gap">
+            <p class="block__label">缺的那一条</p>
+            <p class="block__text">{{ card.weak_point.gap_point || '未记录具体缺口' }}</p>
+          </div>
+
+          <div class="block">
+            <p class="block__label">怎么补</p>
+            <p class="block__text">{{ card.suggestion }}</p>
+          </div>
+
+          <div v-if="card.review_question" class="block">
+            <p class="block__label">复查会换一道题</p>
+            <p class="block__text">{{ card.review_question.title }}</p>
+            <p class="block__meta">
+              {{ card.review_question.type }} · {{ card.review_question.difficulty }}
+            </p>
+          </div>
+
+          <div class="gapcard__foot">
+            <span class="gapcard__hint">
+              <el-icon><Clock /></el-icon>
+              {{
+                card.weak_point.next_review_at
+                  ? `下次复查 ${formatDate(card.weak_point.next_review_at)}`
+                  : statusMeta(card.weak_point).hint
+              }}
+            </span>
+            <el-button
+              v-if="card.weak_point.status === 'open'"
+              type="primary"
+              :icon="EditPen"
+              @click="openAction(card.weak_point, 'fix')"
             >
-              <span class="exercise__idx num">{{ String(index + 1).padStart(2, '0') }}</span>
-              <div class="exercise__body">
-                <p class="exercise__title">{{ exercise.title }}</p>
-                <p class="exercise__meta">
-                  <span>{{ exercise.type }}</span>
-                  <span class="weak__dot">·</span>
-                  <span>{{ exercise.minutes }} 分钟</span>
-                </p>
-                <div class="exercise__tags">
-                  <span v-for="tag in exercise.tags" :key="tag" class="exercise__tag">{{ tag }}</span>
-                </div>
-              </div>
-              <el-icon class="exercise__arrow"><ArrowRight /></el-icon>
-            </li>
-          </ul>
-
-          <el-button type="primary" class="recommend__cta" @click="openPractice(selectedPoint)">
-            打开练习视图
-          </el-button>
-
-          <p class="recommend__note">
-            练习讲解带来源引用，便于核对依据；复述判卷只更新掌握度。
-          </p>
+              补这一句
+            </el-button>
+            <el-button
+              v-else-if="card.weak_point.status === 'fixed'"
+              type="primary"
+              plain
+              @click="openAction(card.weak_point, 'review')"
+            >
+              去复查
+            </el-button>
+            <span v-else class="pill pill--accent">已掌握</span>
+          </div>
         </div>
-
-        <p v-else class="muted recommend__empty">暂无可推荐练习。</p>
       </SectionCard>
     </div>
 
-    <!-- 练习视图 -->
-    <el-drawer
-      v-model="drawerOpen"
-      size="520px"
-      :with-header="false"
-      class="practice-drawer"
-      destroy-on-close
-    >
-      <div v-if="practiceFor" class="practice">
+    <el-drawer v-model="drawerOpen" size="520px" :with-header="false" destroy-on-close>
+      <div v-if="selected" class="practice">
         <header class="practice__head">
-          <button class="practice__close" type="button" aria-label="关闭练习视图" @click="drawerOpen = false">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-            </svg>
+          <button
+            class="practice__close"
+            type="button"
+            aria-label="关闭"
+            @click="drawerOpen = false"
+          >
+            ×
           </button>
           <div class="practice__tags">
-            <span class="pill pill--primary">练习视图</span>
-            <span class="pill" :class="`pill--sev-${practiceFor.severity}`">
-              {{ SEVERITY_META[practiceFor.severity].label }}
+            <span class="pill pill--primary">{{ mode === 'fix' ? '补一句' : '变体复查' }}</span>
+            <span class="pill" :class="`pill--status-${statusMeta(selected).tone}`">
+              {{ statusMeta(selected).label }}
             </span>
           </div>
-          <h2>{{ practiceFor.topic }}</h2>
-          <div class="practice__progress">
-            <span>掌握度</span>
-            <div class="meter">
-              <div
-                class="meter__fill"
-                :class="meterTone(practiceFor.mastery)"
-                :style="{ width: `${practiceFor.mastery}%` }"
-              />
-            </div>
-            <strong class="num">{{ practiceFor.mastery }}%</strong>
-          </div>
+          <h2>{{ selected.topic }}</h2>
+          <p class="practice__sub">
+            {{
+              mode === 'fix'
+                ? '只补缺的那一条，不用重答整道题'
+                : '换了一道题，重点看这条缺口还在不在'
+            }}
+          </p>
         </header>
 
         <div class="practice__body">
-          <section class="practice__section">
-            <h3 class="practice__title">先讲清楚</h3>
-            <p v-for="(para, index) in content.intro" :key="index" class="practice__para" v-html="para" />
+          <div class="block block--gap">
+            <p class="block__label">这次只补这一点</p>
+            <p class="block__text">{{ selected.gap_point || '未记录具体缺口' }}</p>
+          </div>
 
-            <div class="sources">
-              <p class="sources__label">来源</p>
-              <ul>
-                <li v-for="source in content.sources" :key="source.idx">
-                  <span class="sources__idx num">[{{ source.idx }}]</span>
-                  <div>
-                    <p class="sources__title">{{ source.title }}</p>
-                    <p class="sources__meta">{{ source.meta }}</p>
-                  </div>
-                </li>
-              </ul>
+          <div
+            v-if="mode === 'fix' && (card?.source?.quote || card?.source?.answer)"
+            class="block block--quote"
+          >
+            <p class="block__label">上次你是这么说的</p>
+            <p class="block__text">
+              {{ shortText(card.source.quote || card.source.answer, 200) }}
+            </p>
+          </div>
+
+          <div v-if="mode === 'review'" class="block">
+            <p class="block__label">复查题</p>
+            <p class="block__text">
+              {{
+                card?.review_question?.title ||
+                `换个场景：如果项目里要用到「${selected.topic}」，你会怎么讲清这一点？`
+              }}
+            </p>
+          </div>
+
+          <el-input
+            v-model="answer"
+            type="textarea"
+            :rows="5"
+            maxlength="2000"
+            show-word-limit
+            resize="none"
+            :placeholder="
+              mode === 'fix'
+                ? '用 1-3 句话把这一点补上…'
+                : '不看原文，用自己的话讲一遍…'
+            "
+          />
+
+          <div class="practice__actions">
+            <span class="practice__hint">判卷只看这一条缺口，不重判整题</span>
+            <el-button type="primary" :loading="submitting" @click="submit">
+              {{ mode === 'fix' ? '提交补法' : '提交复查' }}
+            </el-button>
+          </div>
+
+          <div v-if="result" class="result">
+            <div class="result__head">
+              <span
+                class="pill"
+                :class="result.gap_covered ? 'pill--accent' : 'pill--sev-high'"
+              >
+                {{ result.gap_covered ? '这条补上了' : '还没补到点上' }}
+              </span>
+              <span class="result__verdict">{{ verdictLabel(result.judgement.verdict) }}</span>
             </div>
-          </section>
+            <p class="result__message">{{ result.message }}</p>
 
-          <section class="practice__section">
-            <h3 class="practice__title">复述一下</h3>
-            <p class="practice__prompt">{{ content.question }}</p>
-            <el-input
-              v-model="practiceAnswer"
-              type="textarea"
-              :rows="4"
-              maxlength="300"
-              show-word-limit
-              resize="none"
-              placeholder="不用回看上文，用自己的话讲一遍…"
-            />
-
-            <div class="practice__actions">
-              <span class="practice__hint">判卷结论复用面试的三档 verdict</span>
-              <el-button size="small" type="primary" plain :loading="judging" @click="judgeAnswer">
-                提交复述
-              </el-button>
-            </div>
-
-            <transition name="fade">
-              <div v-if="judgement" class="judge">
-                <div class="judge__head">
-                  <span class="pill pill--warn">基本到位</span>
-                  <span class="judge__label">复述反馈</span>
-                </div>
-                <div class="judge__grid">
-                  <div>
-                    <p class="judge__title judge__title--hit">讲到了</p>
-                    <ul>
-                      <li v-for="hit in judgement.hits" :key="hit">{{ hit }}</li>
-                    </ul>
-                  </div>
-                  <div>
-                    <p class="judge__title judge__title--miss">还差</p>
-                    <ul>
-                      <li v-for="miss in judgement.misses" :key="miss">{{ miss }}</li>
-                    </ul>
-                  </div>
-                </div>
+            <div v-if="result.mode === 'fix'" class="result__diff">
+              <div>
+                <p class="block__label">上次</p>
+                <p class="result__text">
+                  {{ shortText(result.before_answer || '（无原话记录）', 120) }}
+                </p>
               </div>
-            </transition>
-          </section>
+              <el-icon class="result__arrow"><ArrowRight /></el-icon>
+              <div>
+                <p class="block__label">这次</p>
+                <p class="result__text">{{ shortText(result.after_answer, 120) }}</p>
+              </div>
+            </div>
+
+            <p v-if="result.judgement.feedback" class="result__feedback">
+              {{ result.judgement.feedback }}
+            </p>
+            <p v-if="result.weak_point.next_review_at" class="result__next">
+              下次复查：{{ formatDate(result.weak_point.next_review_at) }} · 第
+              {{ result.weak_point.review_stage }} 阶段
+            </p>
+          </div>
         </div>
 
         <footer class="practice__foot">
-          <span class="practice__foot-hint">掌握后可移出待攻克列表</span>
-          <el-button type="primary" :icon="Check" @click="markMastered">标记已掌握</el-button>
+          <span class="practice__foot-hint">
+            {{
+              mode === 'fix'
+                ? '通过后 1 天复查，之后按记忆曲线拉长（最长 30 天）'
+                : '通过后进入下一间隔；忘了就回到待修复'
+            }}
+          </span>
+          <el-button @click="drawerOpen = false">关闭</el-button>
         </footer>
       </div>
     </el-drawer>
@@ -457,23 +497,6 @@ function meterTone(mastery) {
   flex-direction: column;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 18px;
-  margin-top: 18px;
-  align-items: start;
-}
-
-.span-8 {
-  grid-column: span 8;
-}
-
-.span-4 {
-  grid-column: span 4;
-}
-
-/* ---------------- 概览 ---------------- */
 .stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -516,81 +539,159 @@ function meterTone(mastery) {
   color: var(--ink-4);
 }
 
-/* ---------------- 薄弱点列表 ---------------- */
-.weak-list {
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 18px;
+  align-items: start;
+}
+
+.span-7 {
+  grid-column: span 7;
+}
+
+.span-5 {
+  grid-column: span 5;
+}
+
+.state {
+  padding: 18px 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.state--error {
+  color: #b03e3d;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 26px 20px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.empty__title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.empty__desc {
+  max-width: 460px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-3);
+}
+
+.group + .group {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--line);
+}
+
+.group__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.group__head h3 {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.group__count {
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  font-size: 10.5px;
+  color: var(--ink-2);
+}
+
+.group__hint {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--ink-4);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.dot--warn {
+  background: #d8a12c;
+}
+
+.dot--accent {
+  background: var(--accent);
+}
+
+.rows {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.weak {
-  position: relative;
+.row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px 14px 18px;
-  border-radius: 12px;
+  gap: 12px;
+  padding: 12px 14px;
   border: 1px solid transparent;
+  border-radius: 11px;
   background: var(--surface-2);
   cursor: pointer;
   transition: border-color 0.16s ease, background-color 0.16s ease;
 }
 
-.weak:hover {
+.row:hover {
   border-color: var(--line-strong);
   background: #fff;
 }
 
-.weak.is-active {
+.row.is-active {
   border-color: #d9d7f7;
   background: #fbfaff;
 }
 
-.weak.is-resolved {
-  opacity: 0.62;
-}
-
-.weak__bar {
-  position: absolute;
-  left: 0;
-  top: 14px;
-  bottom: 14px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-}
-
-.weak__bar--high {
-  background: var(--danger);
-}
-
-.weak__bar--medium {
-  background: #d8a12c;
-}
-
-.weak__bar--low {
-  background: var(--accent);
-}
-
-.weak__bar--done {
-  background: var(--line-strong);
-}
-
-.weak__body {
+.row__body {
   flex: 1;
   min-width: 0;
 }
 
-.weak__top {
+.row__top {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
 }
 
-.weak__topic {
-  font-size: 13px;
+.row__topic {
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--ink);
+}
+
+.row__gap {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.row__meta {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--ink-4);
 }
 
 .pill--sev-high {
@@ -608,322 +709,186 @@ function meterTone(mastery) {
   color: var(--ink-2);
 }
 
-.weak__meta {
-  margin-top: 4px;
-  font-size: 11px;
+.pill--status-warn {
+  background: var(--warn-soft);
+  color: #96600f;
+}
+
+.pill--status-accent {
+  background: var(--accent-soft);
+  color: #0b7269;
+}
+
+.pill--status-success {
+  background: var(--accent-soft);
+  color: #0b7269;
+}
+
+.resolved {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+.resolved__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 11.5px;
   color: var(--ink-3);
+  cursor: pointer;
 }
 
-.weak__meta strong {
-  color: var(--ink-2);
-  font-weight: 600;
-}
-
-.weak__dot {
-  margin: 0 5px;
+.resolved__toggle span {
+  margin-left: auto;
   color: var(--ink-4);
 }
 
-.weak__meter {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 9px;
-  max-width: 340px;
-}
-
-.weak__meter .meter {
-  flex: 1;
-}
-
-.weak__pct {
-  flex: none;
-  width: 32px;
-  text-align: right;
-  font-size: 10.5px;
-  color: var(--ink-3);
-}
-
-.weak__cta {
-  flex: none;
-}
-
-.weak-note {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--line);
-  font-size: 11px;
-  line-height: 1.65;
-  color: var(--ink-3);
-}
-
-/* ---------------- 推荐练习 ---------------- */
-.recommend__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.recommend__mastery {
-  font-size: 11px;
-  color: var(--ink-3);
-}
-
-.recommend__mastery strong {
-  color: var(--ink-2);
-}
-
-.exercise-list {
+.resolved__list {
+  margin-top: 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.exercise {
+.resolved__list li {
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   gap: 10px;
-  padding: 11px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  cursor: pointer;
-  transition: border-color 0.16s ease, background-color 0.16s ease;
-}
-
-.exercise:hover {
-  border-color: #d9d7f7;
-  background: #fff;
-}
-
-.exercise__idx {
-  font-size: 10px;
-  color: var(--ink-4);
-  padding-top: 3px;
-}
-
-.exercise__body {
-  flex: 1;
-  min-width: 0;
-}
-
-.exercise__title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ink);
-  line-height: 1.5;
-}
-
-.exercise__meta {
-  margin-top: 3px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--ink-3);
 }
 
-.exercise__tags {
+.resolved__topic {
+  min-width: 120px;
+  color: var(--ink-2);
+}
+
+.gapcard__top {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 7px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
-.exercise__tag {
-  padding: 1px 7px;
-  border-radius: 5px;
-  background: var(--surface-3);
+.gapcard__top h3 {
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+
+.block {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.block + .block {
+  margin-top: 8px;
+}
+
+.block--quote {
+  background: #fbfaff;
+  border-color: #e6e3fb;
+}
+
+.block--gap {
+  background: var(--warn-soft);
+  border-color: #f0dcc0;
+}
+
+.block__label {
   font-size: 10px;
-  color: var(--ink-3);
-}
-
-.exercise__arrow {
-  flex: none;
-  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
   color: var(--ink-4);
+  margin-bottom: 4px;
+}
+
+.block__text {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+
+.block__meta {
   margin-top: 4px;
+  font-size: 10px;
+  color: var(--ink-4);
 }
 
-.recommend__cta {
-  width: 100%;
-  margin-top: 14px;
+.gapcard__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
 }
 
-.recommend__note {
-  margin-top: 10px;
+.gapcard__hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 10.5px;
-  line-height: 1.6;
-  color: var(--ink-3);
+  color: var(--ink-4);
 }
 
-.recommend__empty {
-  font-size: 12.5px;
-  padding: 20px 0;
-}
-
-/* ---------------- 练习抽屉 ---------------- */
 .practice {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 100%;
 }
 
 .practice__head {
   position: relative;
-  padding: 26px 60px 18px 26px;
+  padding: 24px 56px 16px 26px;
   border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, #fbfaff, #fff);
 }
 
 .practice__close {
   position: absolute;
-  top: 20px;
-  right: 20px;
-  display: grid;
-  place-items: center;
+  top: 18px;
+  right: 18px;
   width: 30px;
   height: 30px;
   border-radius: 8px;
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--ink-3);
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
-  transition: color 0.16s ease, border-color 0.16s ease;
-}
-
-.practice__close:hover {
-  color: var(--ink);
-  border-color: var(--line-strong);
 }
 
 .practice__tags {
   display: flex;
   gap: 6px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .practice__head h2 {
-  font-size: 19px;
-  letter-spacing: -0.025em;
-  line-height: 1.4;
+  font-size: 18px;
+  letter-spacing: -0.02em;
 }
 
-.practice__progress {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 14px;
-  font-size: 11px;
-  color: var(--ink-3);
-}
-
-.practice__progress .meter {
-  flex: 1;
-  max-width: 220px;
-}
-
-.practice__progress strong {
-  color: var(--ink-2);
+.practice__sub {
+  margin-top: 4px;
   font-size: 11.5px;
+  color: var(--ink-3);
 }
 
 .practice__body {
   flex: 1;
   overflow-y: auto;
-  padding: 22px 26px 26px;
+  padding: 20px 26px;
   display: flex;
   flex-direction: column;
-  gap: 26px;
-}
-
-.practice__title {
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: 0.01em;
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.practice__title::before {
-  content: '';
-  width: 3px;
-  height: 12px;
-  border-radius: 2px;
-  background: var(--primary);
-}
-
-.practice__para {
-  font-size: 13px;
-  line-height: 1.9;
-  color: var(--ink-2);
-}
-
-.practice__para + .practice__para {
-  margin-top: 8px;
-}
-
-.practice__para :deep(.cite) {
-  font-size: 9.5px;
-  font-weight: 650;
-  color: var(--primary);
-  vertical-align: super;
-  line-height: 0;
-  margin-left: 1px;
-}
-
-.sources {
-  margin-top: 16px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px dashed var(--line-strong);
-  background: var(--surface-2);
-}
-
-.sources__label {
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ink-4);
-  margin-bottom: 8px;
-}
-
-.sources li {
-  display: flex;
-  gap: 8px;
-  padding: 4px 0;
-}
-
-.sources__idx {
-  flex: none;
-  font-size: 10px;
-  color: var(--primary);
-  padding-top: 1px;
-}
-
-.sources__title {
-  font-size: 11.5px;
-  color: var(--ink-2);
-}
-
-.sources__meta {
-  font-size: 10px;
-  color: var(--ink-4);
-  margin-top: 1px;
-}
-
-.practice__prompt {
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--ink-2);
-  padding: 10px 12px;
-  border-radius: 9px;
-  background: var(--primary-soft);
-  margin-bottom: 12px;
+  gap: 12px;
 }
 
 .practice__actions {
@@ -931,71 +896,11 @@ function meterTone(mastery) {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 10px;
 }
 
 .practice__hint {
   font-size: 10.5px;
   color: var(--ink-4);
-}
-
-.judge {
-  margin-top: 14px;
-  padding: 14px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-}
-
-.judge__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.judge__label {
-  font-size: 10.5px;
-  color: var(--ink-4);
-}
-
-.judge__grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-
-.judge__title {
-  font-size: 10.5px;
-  font-weight: 650;
-  margin-bottom: 5px;
-}
-
-.judge__title--hit {
-  color: #0b7269;
-}
-
-.judge__title--miss {
-  color: #96600f;
-}
-
-.judge__grid li {
-  font-size: 11.5px;
-  line-height: 1.7;
-  color: var(--ink-2);
-  padding-left: 9px;
-  position: relative;
-}
-
-.judge__grid li::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--ink-4);
 }
 
 .practice__foot {
@@ -1013,20 +918,67 @@ function meterTone(mastery) {
   color: var(--ink-3);
 }
 
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+.result {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
 }
 
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-  transform: translateY(4px);
+.result__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.result__verdict {
+  font-size: 10.5px;
+  color: var(--ink-4);
+}
+
+.result__message {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+
+.result__diff {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.result__text {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+
+.result__arrow {
+  color: var(--ink-4);
+}
+
+.result__feedback {
+  margin-top: 8px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-3);
+}
+
+.result__next {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--ink-4);
 }
 
 @media (max-width: 1080px) {
-  .span-8,
-  .span-4 {
+  .span-7,
+  .span-5 {
     grid-column: span 12;
   }
 }
@@ -1045,35 +997,16 @@ function meterTone(mastery) {
     padding: 12px 16px;
   }
 
-  .stat__value {
-    font-size: 22px;
-  }
-
-  .stat__hint {
-    display: none;
-  }
-
-  .weak {
+  .row {
     flex-wrap: wrap;
   }
 
-  .weak__cta {
-    width: 100%;
-  }
-
-  .practice__head {
-    padding: 22px 56px 16px 18px;
-  }
-
-  .practice__body,
-  .practice__foot {
-    padding-left: 18px;
-    padding-right: 18px;
-  }
-
-  .judge__grid {
+  .result__diff {
     grid-template-columns: 1fr;
-    gap: 10px;
+  }
+
+  .result__arrow {
+    display: none;
   }
 }
 </style>
