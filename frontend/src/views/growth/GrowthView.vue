@@ -47,10 +47,13 @@ async function loadAll(showLoading = true) {
       (item) => item.resolved || item.status === 'resolved',
     )
 
-    const keep =
+    // 保留当前选中：提交后这条可能已离开队列（修好→待复查），
+    // 若回退到第一条，抽屉里的题面会在用户眼前变成另一条缺口
+    const inQueue =
       selected.value && queueItems.value.find((item) => item.id === selected.value.id)
-    selected.value = keep || queueItems.value[0] || null
-    if (selected.value) await loadCard(selected.value.id)
+    const keep = selected.value ? inQueue || selected.value : queueItems.value[0] || null
+    selected.value = keep || null
+    if (keep) await loadCard(keep.id)
     else card.value = null
   } catch (err) {
     loadError.value = err?.message || '今日队列加载失败，请稍后重试'
@@ -75,14 +78,25 @@ function selectItem(item) {
   loadCard(item.id)
 }
 
-function openAction(item, kind) {
+async function openAction(item, kind) {
   if (!item) return
   selected.value = item
   mode.value = kind
   answer.value = ''
   result.value = null
   drawerOpen.value = true
-  if (!card.value || card.value.weak_point.id !== item.id) loadCard(item.id)
+  // 卡片必须是当前这条的：否则抽屉会显示上一条的题，提交却打到新条目
+  if (!card.value || card.value.weak_point.id !== item.id) {
+    card.value = null
+    await loadCard(item.id)
+  }
+}
+
+function cardReady() {
+  if (!card.value || !selected.value) return false
+  if (card.value.weak_point.id !== selected.value.id) return false
+  if (mode.value === 'review' && !card.value.review_question?.title) return false
+  return true
 }
 
 async function submit() {
@@ -90,6 +104,10 @@ async function submit() {
   if (!point) return
   if (!answer.value.trim()) {
     ElMessage.warning('先写下你的回答')
+    return
+  }
+  if (!cardReady()) {
+    ElMessage.warning('题目还没加载完成，请稍候再提交')
     return
   }
   submitting.value = true
@@ -103,12 +121,9 @@ async function submit() {
           })
     result.value = { mode: mode.value, ...data }
     ElMessage.success(data.message || (data.gap_covered ? '这条补上了' : '还没补到点上'))
+    // 抽屉要停在刚提交的这条上（它可能已经离开待修复队列）
+    if (data.weak_point) selected.value = data.weak_point
     await loadAll(false)
-    // 修复后这条会离开"待修复"队列，但抽屉要停在它上面展示结果
-    if (data.weak_point) {
-      selected.value = data.weak_point
-      await loadCard(data.weak_point.id)
-    }
   } catch (err) {
     ElMessage.error(err?.message || '提交失败，请稍后重试')
   } finally {
@@ -394,9 +409,23 @@ onMounted(() => loadAll())
         </header>
 
         <div class="practice__body">
-          <div class="block block--gap">
-            <p class="block__label">这次只补这一点</p>
-            <p class="block__text">{{ selected.gap_point || '未记录具体缺口' }}</p>
+          <p v-if="cardLoading" class="practice__loading">正在取题…</p>
+
+          <div v-if="mode === 'fix'" class="block block--gap">
+            <p class="block__label">要补的那一点（判卷只看这段）</p>
+            <p class="block__text">
+              {{ card?.fix_prompt || selected.gap_point || '未记录具体缺口' }}
+            </p>
+          </div>
+
+          <div v-else class="block">
+            <p class="block__label">
+              复查题
+              <span v-if="card?.review_question?.origin === 'rewritten'" class="tag">改写题</span>
+            </p>
+            <p class="block__text">
+              {{ card?.review_question?.title || '题面加载中…' }}
+            </p>
           </div>
 
           <div
@@ -406,16 +435,6 @@ onMounted(() => loadAll())
             <p class="block__label">上次你是这么说的</p>
             <p class="block__text">
               {{ shortText(card.source.quote || card.source.answer, 200) }}
-            </p>
-          </div>
-
-          <div v-if="mode === 'review'" class="block">
-            <p class="block__label">复查题</p>
-            <p class="block__text">
-              {{
-                card?.review_question?.title ||
-                `换个场景：如果项目里要用到「${selected.topic}」，你会怎么讲清这一点？`
-              }}
             </p>
           </div>
 
@@ -435,7 +454,12 @@ onMounted(() => loadAll())
 
           <div class="practice__actions">
             <span class="practice__hint">判卷只看这一条缺口，不重判整题</span>
-            <el-button type="primary" :loading="submitting" @click="submit">
+            <el-button
+              type="primary"
+              :loading="submitting"
+              :disabled="!cardReady()"
+              @click="submit"
+            >
               {{ mode === 'fix' ? '提交补法' : '提交复查' }}
             </el-button>
           </div>
@@ -492,6 +516,23 @@ onMounted(() => loadAll())
 </template>
 
 <style scoped>
+.practice__loading {
+  font-size: 12px;
+  color: var(--ink-3);
+  padding: 8px 0;
+}
+
+.tag {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+  vertical-align: middle;
+}
 .page {
   display: flex;
   flex-direction: column;

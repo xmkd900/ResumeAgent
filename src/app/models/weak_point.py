@@ -107,6 +107,14 @@ class WeakPoint(Base):
     last_reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime, comment="最近一次复查时间"
     )
+    # 已选定但还没作答的复查题：保证"页面看到的题"和"判卷用的题"是同一道，
+    # 也让刷新页面后题目不跳变（改写题每次调用模型结果都不同）。
+    pending_review_question_id: Mapped[int | None] = mapped_column(
+        Integer, comment="已选定的复查题 ID（题库题；改写题为空）"
+    )
+    pending_review_question_text: Mapped[str | None] = mapped_column(
+        Text, comment="已选定的复查题面（改写题同样落库，避免刷新后换题）"
+    )
     fix_count: Mapped[int] = mapped_column(
         Integer, default=0, comment="累计修复次数（改写/补一句）"
     )

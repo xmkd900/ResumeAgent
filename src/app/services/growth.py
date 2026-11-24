@@ -274,6 +274,7 @@ def sync_from_interview(
         row.status = STATUS_OPEN
         row.review_stage = 0
         row.next_review_at = None
+        _clear_pending_review(row)
         reopened += 1
 
     if created or reopened:
@@ -910,6 +911,73 @@ def _pick_review_question(
     return _candidate_of(pool[0])
 
 
+def _candidate_from_pending(
+    db: Session, weak_point: WeakPoint
+) -> ReviewCandidate | None:
+    """还原已锁定的复查题；题库题下线了返回 None，让调用方重新选。"""
+    text = (weak_point.pending_review_question_text or "").strip()
+    question_id = weak_point.pending_review_question_id
+    if question_id is not None:
+        question = db.get(InterviewQuestion, question_id)
+        if question is None or question.status != "published":
+            return None
+        candidate = _candidate_of(question)
+        if text:
+            candidate.content = text
+        return candidate
+    if text:
+        return ReviewCandidate(
+            id=None,
+            content=text,
+            question_type="scenario",
+            difficulty=_review_difficulty(weak_point.review_stage),
+            expected_points=[],
+            rubric={},
+        )
+    return None
+
+
+def _pin_review_question(weak_point: WeakPoint, candidate: ReviewCandidate) -> None:
+    """锁定复查题：库里存一份，保证刷新/重进看到的还是这道。"""
+    weak_point.pending_review_question_id = candidate.id
+    weak_point.pending_review_question_text = candidate.content
+
+
+def _clear_pending_review(weak_point: WeakPoint) -> None:
+    weak_point.pending_review_question_id = None
+    weak_point.pending_review_question_text = None
+
+
+def _resolve_review_question(
+    db: Session,
+    weak_point: WeakPoint,
+    *,
+    question_id: int | None = None,
+    refresh: bool = False,
+) -> ReviewCandidate | None:
+    """复查题的唯一入口：先复用已锁定的题，没有再选并锁定。
+
+    以前 build_gap_card 和 submit_review 各自调一次选题函数，改写题每次
+    模型输出都不同 —— 页面显示的是一道题、判卷用的是另一道题。现在两边
+    都走这里，题面只在第一次确定时生成一次。
+    """
+    if question_id is not None:
+        candidate = _pick_review_question(db, weak_point, question_id)
+        if candidate is not None:
+            _pin_review_question(weak_point, candidate)
+        return candidate
+
+    if not refresh:
+        cached = _candidate_from_pending(db, weak_point)
+        if cached is not None:
+            return cached
+
+    candidate = _pick_review_question(db, weak_point)
+    if candidate is not None:
+        _pin_review_question(weak_point, candidate)
+    return candidate
+
+
 SUGGESTION_SYSTEM_PROMPT = """你是技术面试辅导老师。候选人上一次回答漏掉了某条关键要点，
 请给出 1-2 句"正确补法"，让他能直接照着讲出来。
 
@@ -977,13 +1045,26 @@ def _gap_suggestion(db: Session, weak_point: WeakPoint) -> str:
     return fallback
 
 
-def _fix_question(weak_point: WeakPoint, source_question: str = "") -> str:
-    """修复阶段只要求补缺口，不要求重答整题；给出原题便于判卷对齐语境。"""
-    prefix = f"原题是：{source_question}\n" if source_question else ""
+def _fix_prompt(weak_point: WeakPoint, source_question: str = "") -> str:
+    """Fix 的题面：页面展示与判卷用的是同一段文字。"""
+    prefix = f"原题：{source_question}\n" if source_question else ""
     return (
-        f"{prefix}不用重新回答整道题。你上次在「{weak_point.topic}」这块没讲清："
-        f"{weak_point.gap_point}。用 1-3 句话把这一点补上，"
-        "说清它是什么、为什么需要、或者怎么验证。"
+        f"{prefix}不用重答整题。你上次在「{weak_point.topic}」没讲清："
+        f"{weak_point.gap_point}。\n"
+        "用 1-3 句话把这一点补上：它是什么、为什么需要、或者怎么验证。"
+    )
+
+
+def _fix_question(weak_point: WeakPoint, source_question: str = "") -> str:
+    """兼容旧调用；判卷题面与页面展示保持一致。"""
+    return _fix_prompt(weak_point, source_question)
+
+
+def _fallback_review_text(weak_point: WeakPoint) -> str:
+    """题库与改写都拿不到题时的兜底题面：页面与判卷共用同一句话。"""
+    return (
+        f"换个场景：如果项目里要用到「{weak_point.topic}」，"
+        f"你会怎么讲清这一点——{weak_point.gap_point or '上次没讲透的地方'}？"
     )
 
 
@@ -992,10 +1073,7 @@ def _review_question_text(
 ) -> str:
     if question is not None:
         return question.content
-    return (
-        f"换个场景：如果项目里要用到「{weak_point.topic}」，"
-        f"你会怎么讲清这一点——{weak_point.gap_point or '上次没讲透的地方'}？"
-    )
+    return _fallback_review_text(weak_point)
 
 
 def _review_points(
@@ -1102,21 +1180,39 @@ def build_gap_card(db: Session, *, user_id: int, weak_point_id: int) -> GapCardO
                 quote=weak_point.gap_quote or "",
             )
 
-    preview = _pick_review_question(db, weak_point)
+    preview = _resolve_review_question(db, weak_point)
+    if preview is not None:
+        # 锁定的题目要落库，否则下一次请求又会重新选（改写题尤其明显）
+        db.commit()
+        db.refresh(weak_point)
+
     return GapCardOut(
         weak_point=to_out(weak_point),
         source=source,
         suggestion=_gap_suggestion(db, weak_point),
+        fix_prompt=_fix_prompt(weak_point, source.question),
         review_question=(
             ReviewQuestionOut(
                 question_id=preview.id,
                 title=preview.content,
                 type=_TYPE_LABEL.get(preview.question_type, "概念讲解"),
                 difficulty=preview.difficulty or "mid",
-                reason=f"同能力项变体题，难度 {preview.difficulty}",
+                origin="rewritten" if preview.id is None else "bank",
+                reason=(
+                    "同能力项改写题，换场景考同一条缺口"
+                    if preview.id is None
+                    else f"同能力项变体题，难度 {preview.difficulty}"
+                ),
             )
             if preview is not None
-            else None
+            else ReviewQuestionOut(
+                question_id=None,
+                title=_fallback_review_text(weak_point),
+                type="口述题",
+                difficulty=_review_difficulty(weak_point.review_stage),
+                origin="fallback",
+                reason="题库没有匹配题，用缺口本身提问",
+            )
         ),
     )
 
@@ -1164,6 +1260,7 @@ def submit_fix(
         weak_point.next_review_at = datetime.now() + timedelta(
             days=FIRST_INTERVAL_DAYS
         )
+        _clear_pending_review(weak_point)
     weak_point.fix_count += 1
 
     _log_action(
@@ -1208,7 +1305,7 @@ def submit_review(
     if weak_point.status != STATUS_FIXED or weak_point.resolved:
         raise GrowthError("这条还不在复查阶段，先完成修复", 409)
 
-    question = _pick_review_question(db, weak_point, question_id)
+    question = _resolve_review_question(db, weak_point, question_id=question_id)
     points, rubric = _review_points(weak_point, question)
     question_text = _review_question_text(weak_point, question)
 
@@ -1234,6 +1331,7 @@ def submit_review(
     )
     weak_point.review_count += 1
     weak_point.last_reviewed_at = datetime.now()
+    _clear_pending_review(weak_point)
 
     _log_action(
         db,

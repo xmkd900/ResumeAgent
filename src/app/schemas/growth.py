@@ -139,6 +139,8 @@ class ReviewQuestionOut(BaseModel):
     title: str = ""
     type: str = "概念讲解"
     difficulty: str = "mid"
+    # bank 题库原题 / rewritten 由原题改写的变体题（无 id，不落题库）
+    origin: str = "bank"
     reason: str = ""
 
 
@@ -146,6 +148,8 @@ class GapCardOut(BaseModel):
     weak_point: WeakPointOut
     source: GapSourceOut = Field(default_factory=GapSourceOut)
     suggestion: str = ""
+    # Fix 的题面：页面展示的就是判卷时用的那段文字
+    fix_prompt: str = ""
     review_question: ReviewQuestionOut | None = None
 
 
