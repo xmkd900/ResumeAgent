@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import InterviewQuestion, InterviewSession, InterviewTurn, WeakPoint
 from app.schemas.interview import InterviewEvaluationOut
-from app.services.interview_context import resolve_domain, search_bank
+from app.services.interview_context import resolve_domain, search_bank_outcome
 from app.services.interview_director import choose_from_bank, write_evaluation
 
 logger = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ def pick_bank_question(
     """题库检索 + 挑选改写；rubric 以数据库为准。"""
     used_ids = {turn.question_id for turn in turns if turn.question_id is not None}
     domain = (session.briefing or {}).get("domain") or resolve_domain(session.position)
-    candidates = search_bank(
+    outcome = search_bank_outcome(
         db,
         domain=domain,
         query=decision.search_query or decision.competency or "",
@@ -118,6 +118,11 @@ def pick_bank_question(
         exclude_ids=used_ids,
         limit=5,
     )
+    if outcome.degraded:
+        logger.warning(
+            "题库检索降级（session %s）：%s", session.id, "；".join(outcome.reasons)
+        )
+    candidates = outcome.questions
     choice = choose_from_bank(
         briefing=session.briefing or {},
         turns=turns,

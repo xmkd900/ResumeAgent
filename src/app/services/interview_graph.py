@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import InterviewQuestion, InterviewSession
 from app.services import interview_engine as engine
-from app.services.interview_context import resolve_domain, search_bank
+from app.services.interview_context import resolve_domain, search_bank_outcome
 from app.services.interview_director import (
     DirectorDecision,
     choose_from_bank,
@@ -190,7 +190,7 @@ def search_node(state: InterviewState, config) -> dict:
 
     _emit("search", "start")
     used_ids = {turn.question_id for turn in turns if turn.question_id is not None}
-    candidates = search_bank(
+    outcome = search_bank_outcome(
         db,
         domain=(session.briefing or {}).get("domain") or resolve_domain(session.position),
         query=decision.search_query or decision.competency or "",
@@ -199,6 +199,13 @@ def search_node(state: InterviewState, config) -> dict:
         exclude_ids=used_ids,
         limit=5,
     )
+    if outcome.degraded:
+        logger.info(
+            "题库检索降级（session %s）：%s", session.id, "；".join(outcome.reasons)
+        )
+    # 考点不在题库时，候选与意图无关：宁可现场出题，也不要按错的 rubric 判卷。
+    # 难度不符则保留（题目内容仍相关），只记录降级原因。
+    candidates = [] if outcome.competency_missed else outcome.questions
     if not candidates:
         logger.info("题库无候选，改为现场提问")
         retry = decide(
